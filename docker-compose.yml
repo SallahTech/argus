@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+      POSTGRES_DB: argus
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["5432:5432"]
+
+  api:
+    build: .
+    depends_on: [db]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://argus:argus@db:5432/argus
+    ports: ["3000:3000"]
+    volumes:
+      # put the repos you want watched in ./repos, register them as /repos/<name>
+      - ./repos:/repos:ro
+
+volumes:
+  pgdata:
