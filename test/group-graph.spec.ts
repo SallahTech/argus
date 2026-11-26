@@ -49,3 +49,32 @@ describe('buildGraph', () => {
     expect(g.nodes.find((n) => n.id === 'multer')).toMatchObject({ depth: 3, level: 'RELEVANT', vulns: 1 });
   });
 });
+
+describe('buildGraph with several versions of one package', () => {
+  it('uses the running version, ignores dev/unreachable versions and their findings', () => {
+    const typeorm = dep('typeorm', ['typeorm']);
+    const glob = dep('glob', ['typeorm', 'glob'], { direct: false, version: '10.5.0' });
+    const globDev = dep('glob', ['glob'], { direct: false, version: '7.2.3', dev: true, reachable: null, path: undefined });
+    const mm = dep('minimatch', ['typeorm', 'glob', 'minimatch'], { direct: false, version: '9.0.9' });
+    const mmDev = dep('minimatch', ['minimatch'], { direct: false, version: '3.1.5', dev: true, reachable: null, path: undefined });
+    const be = dep('brace-expansion', ['typeorm', 'glob', 'minimatch', 'brace-expansion'], { direct: false, version: '2.0.2' });
+    const beDev = dep('brace-expansion', ['brace-expansion'], { direct: false, version: '5.0.4', dev: true, reachable: null, path: undefined });
+    const uuid = dep('uuid', ['uuid'], { version: '13.0.0' });
+    const uuidOld = dep('uuid', ['uuid'], { direct: false, version: '11.1.0', reachable: null, path: undefined });
+    // dev / unreachable versions listed last, like a lockfile would
+    const deps = [typeorm, glob, mm, be, uuid, globDev, mmDev, beDev, uuidOld];
+    const groups = groupFindings([
+      finding(be, 'be', 52, 'RELEVANT', '2.1.7'),
+      finding(mmDev, 'mm', 20, 'IRRELEVANT', '3.1.6'),
+      finding(uuidOld, 'u', 25, 'IRRELEVANT', '11.1.1'),
+    ]);
+    const g = buildGraph(deps, groups);
+    const node = (n: string) => g.nodes.find((x) => x.id === n);
+    expect(node('brace-expansion')).toMatchObject({ version: '2.0.2', level: 'RELEVANT', depth: 4 });
+    expect(node('glob')).toMatchObject({ version: '10.5.0', depth: 2 });
+    expect(node('minimatch')).toMatchObject({ version: '9.0.9', level: null, depth: 3 }); // dev version's finding not drawn
+    expect(node('uuid')).toMatchObject({ version: '13.0.0', level: null, depth: 1 }); // old unreachable uuid not drawn
+    expect(g.edges.find((e) => e.from === 'minimatch' && e.to === 'brace-expansion')?.level).toBe('RELEVANT');
+    expect(g.edges.find((e) => e.from === ROOT && e.to === 'minimatch')).toBeUndefined();
+  });
+});
