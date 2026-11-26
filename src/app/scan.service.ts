@@ -117,7 +117,10 @@ export class ScanService {
           importCount: r.dependency.importCount,
           via: r.dependency.via,
           loadedBy: r.dependency.loadedBy,
+          buildTimeOnly: r.dependency.buildTimeOnly,
+          buildTool: r.dependency.buildTool,
         },
+        check: r.check ?? null,
         status: 'open',
       });
       const last = f.scoreHistory.at(-1);

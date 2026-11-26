@@ -20,6 +20,25 @@ export interface Dependency {
   loadedBy?: string;
   /** chain from your code to this package, e.g. ['@nestjs/core','@nestjs/platform-express','multer'] */
   path?: string[];
+  /** reachable only through a build tool (postcss, webpack...), so it never runs in production */
+  buildTimeOnly?: boolean;
+  buildTool?: string;
+}
+
+/**
+ * Does this project use the part of the package the vulnerability lives in?
+ * - unused: not exploitable here (feature never used, or build time only)
+ * - used:   the vulnerable feature is in use, evidence points at the code
+ */
+export interface FeatureCheck {
+  status: 'used' | 'unused';
+  kind: 'feature' | 'build-time';
+  /** e.g. "file uploads (multer)" */
+  feature: string;
+  /** one line a human can read in an alert */
+  detail: string;
+  /** file:line references */
+  evidence: string[];
 }
 
 export interface Vulnerability {

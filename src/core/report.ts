@@ -32,6 +32,8 @@ export function renderReport(r: ScanResult, opts: { showAll?: boolean } = {}): s
   lines.push(
     `${c.yellow}│${c.reset} ${r.findings.length} known vulnerabilities in ${groups.length} packages, ${attention.length} need attention`,
   );
+  const ruledOut = r.findings.filter((f) => f.check?.status === 'unused').length;
+  if (ruledOut) lines.push(`${c.yellow}│${c.reset} ${ruledOut} ruled out: vulnerable feature unused or build time only`);
   lines.push(`${c.yellow}└──────────────────────────────────────────────────────────┘${c.reset}`);
 
   if (!shown.length) {
@@ -59,6 +61,8 @@ export function renderReport(r: ScanResult, opts: { showAll?: boolean } = {}): s
     }
     if (!opts.showAll && count > 3) lines.push(`   ${c.dim}... and ${count - 3} more${c.reset}`);
     lines.push(`   ${c.dim}why:${c.reset} ${top.reasons.join(' · ')}`);
+    const checks = [...new Set(g.findings.map((f) => f.check?.detail).filter(Boolean))];
+    if (checks.length) lines.push(`   ${c.dim}feature:${c.reset} ${checks.join(' · ')}`);
     lines.push(`   ${c.dim}fix:${c.reset} ${fix}`);
   }
   if (suppressed) lines.push(`\n${c.dim}${suppressed} more packages assessed as IRRELEVANT (use --all to show)${c.reset}`);

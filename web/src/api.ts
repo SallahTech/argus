@@ -60,7 +60,16 @@ export interface Finding {
   kevDateAdded: string | null;
   published: string | null;
   malicious: boolean;
+  check: FeatureCheck | null;
   scoreHistory: { at: string; score: number }[];
+}
+
+export interface FeatureCheck {
+  status: 'used' | 'unused';
+  kind: 'feature' | 'build-time';
+  feature: string;
+  detail: string;
+  evidence: string[];
 }
 
 export interface ThreatNumber {
@@ -77,6 +86,7 @@ export interface ThreatNumber {
   unfixed: number;
   firstSeenAt: string;
   findings: Finding[];
+  notExploitable: boolean;
 }
 
 export interface CaseFile extends ThreatNumber {

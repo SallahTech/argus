@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ArgusEvent, CaseFile, Level, ThreatNumber } from './api';
+import type { ArgusEvent, CaseFile, FeatureCheck, Level, ThreatNumber } from './api';
 
 const cls = (level: Level | null | undefined) => (level === 'CRITICAL' ? 'c-red' : level === 'RELEVANT' ? 'c-yellow' : 'c-white');
 
@@ -51,6 +51,7 @@ export function NumbersPanel({ numbers, showQuiet, onToggleQuiet, onSelect, sele
             </div>
             <div className="number-meta">
               <span className={`pill ${cls(n.level)}`}>{n.level}</span>
+              {n.notExploitable && <span className="pill pill-safe">NOT EXPLOITABLE</span>}
               <span className="muted">
                 {n.findings.length} vuln{n.findings.length > 1 ? 's' : ''}
                 {n.findings.some((f) => f.kevDateAdded) && ' · EXPLOITED'}
@@ -64,6 +65,49 @@ export function NumbersPanel({ numbers, showQuiet, onToggleQuiet, onSelect, sele
         {showQuiet ? 'hide irrelevant' : `show ${quiet.length} irrelevant`}
       </button>
     </section>
+  );
+}
+
+/** Is the vulnerable part of the package actually used here? One line per distinct check. */
+function FeatureChecks({ file }: { file: CaseFile }) {
+  const seen = new Map<string, { check: FeatureCheck; ids: string[] }>();
+  for (const f of file.findings) {
+    if (!f.check) continue;
+    const k = `${f.check.status}|${f.check.feature}`;
+    const e = seen.get(k) ?? { check: f.check, ids: [] };
+    e.ids.push(f.cveId ?? f.vulnId);
+    seen.set(k, e);
+  }
+  if (!seen.size) return null;
+  const unchecked = file.findings.filter((f) => !f.check).length;
+  return (
+    <div className="block">
+      <div className="muted small">FEATURE CHECK</div>
+      {[...seen.values()].map(({ check, ids }) => (
+        <div key={check.status + check.feature} className={`check check-${check.status}`}>
+          <div className="check-head">
+            <span className="check-mark">{check.status === 'unused' ? '✓' : '!'}</span>
+            <span>
+              {check.status === 'unused'
+                ? check.kind === 'build-time'
+                  ? 'Build time only: never runs in production'
+                  : `Not exploitable here: ${check.feature} never used`
+                : `In use: ${check.feature}`}
+            </span>
+          </div>
+          <div className="check-detail">{check.detail.replace(/^not exploitable here: /i, '')}</div>
+          {check.status === 'used' &&
+            check.evidence.map((e) => (
+              <code key={e} className="check-ev">
+                {e}
+              </code>
+            ))}
+          {check.kind === 'build-time' && <code className="check-ev">{['your code', ...check.evidence].join(' → ')}</code>}
+          <div className="muted small">{ids.join(' · ')}</div>
+        </div>
+      ))}
+      {unchecked > 0 && <div className="muted small">{unchecked} other vulnerabilit{unchecked > 1 ? 'ies' : 'y'}: no feature rule, scored on reachability</div>}
+    </div>
   );
 }
 
@@ -133,6 +177,8 @@ export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () =
             ))}
           </ul>
         </div>
+
+        <FeatureChecks file={file} />
 
         <div className="block">
           <div className="muted small">VULNERABILITIES ({file.findings.length})</div>

@@ -42,15 +42,57 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
 }
 
-/** Count, per package, how many source files import it. */
-export async function scanImports(repoPath: string): Promise<Map<string, number>> {
-  const counts = new Map<string, number>();
-  for await (const file of walk(repoPath)) {
-    const code = await fs.readFile(file, 'utf8');
-    for (const pkg of importsInSource(code)) counts.set(pkg, (counts.get(pkg) ?? 0) + 1);
+/** Every source file of the project (minus node_modules, build output), read once. */
+export interface SourceIndex {
+  files: { file: string; code: string }[]; // file is relative to the repo
+}
+
+const MAX_FILE_BYTES = 1_000_000; // skip bundles / generated files
+
+export async function indexSources(repoPath: string): Promise<SourceIndex> {
+  const files: SourceIndex['files'] = [];
+  for await (const abs of walk(repoPath)) {
+    const stat = await fs.stat(abs);
+    if (stat.size > MAX_FILE_BYTES) continue;
+    files.push({ file: path.relative(repoPath, abs), code: await fs.readFile(abs, 'utf8') });
   }
+  return { files };
+}
+
+export function countImports(index: SourceIndex): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const { code } of index.files)
+    for (const pkg of importsInSource(code)) counts.set(pkg, (counts.get(pkg) ?? 0) + 1);
   return counts;
 }
+
+/** Count, per package, how many source files import it. */
+export async function scanImports(repoPath: string): Promise<Map<string, number>> {
+  return countImports(await indexSources(repoPath));
+}
+
+/**
+ * Packages that only run while building (CSS processing, bundling, compiling).
+ * Anything reachable *only* through them never runs in production.
+ */
+export const BUILD_TIME = new Set([
+  'postcss',
+  'autoprefixer',
+  'tailwindcss',
+  '@tailwindcss/postcss',
+  'sass',
+  'less',
+  'stylus',
+  'webpack',
+  'terser',
+  'esbuild',
+  'rollup',
+  'vite',
+  '@babel/core',
+  'typescript',
+  'eslint',
+  'prettier',
+]);
 
 /**
  * Import-level reachability.
@@ -134,6 +176,30 @@ export function applyReachability(deps: Dependency[], imports: Map<string, numbe
       }
     }
     if (d.reachable && !d.dev) d.path = pathOf.get(d.name) ?? [d.name];
+  }
+
+  // Runtime reachability: the same walk, but never stepping *into* a build tool.
+  // (A build tool you import yourself still counts as runtime.)
+  const runtime = new Set<string>();
+  const rq = [
+    ...[...directProd.values()].filter((d) => d.reachable).map((d) => d.name),
+    ...[...imports.keys()].filter((n) => childrenOf.has(n)), // anything your code imports runs
+  ];
+  rq.forEach((n) => runtime.add(n));
+  while (rq.length) {
+    const name = rq.shift()!;
+    for (const child of [...(childrenOf.get(name) ?? []), ...(peersOf.get(name) ?? [])]) {
+      if (runtime.has(child) || BUILD_TIME.has(child)) continue;
+      if (!childrenOf.has(child)) continue; // peer not installed
+      runtime.add(child);
+      rq.push(child);
+    }
+  }
+  for (const d of out) {
+    if (d.reachable && !d.dev && !runtime.has(d.name)) {
+      d.buildTimeOnly = true;
+      d.buildTool = d.path?.find((p) => BUILD_TIME.has(p)) ?? [...BUILD_TIME].find((b) => childrenOf.get(b)?.has(d.name));
+    }
   }
   return out;
 }
