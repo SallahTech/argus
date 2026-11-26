@@ -1,6 +1,6 @@
 import * as path from 'path';
-import { parseLockfile } from '../src/core/lockfile';
-import { importsInSource, packageFromSpecifier } from '../src/core/reachability';
+import { parseNpmLockfile as parseLockfile } from '../src/core/lockfiles';
+import { applyReachability, importsInSource, packageFromSpecifier } from '../src/core/reachability';
 import { normalizeOsv } from '../src/core/feeds';
 import { assess, pickFixVersion } from '../src/core/scoring';
 import { inventory, scanRepo } from '../src/core/pipeline';
@@ -9,7 +9,7 @@ import { Dependency, Vulnerability } from '../src/core/types';
 const FIXTURE = path.join(__dirname, 'fixtures/demo-app');
 
 const dep = (o: Partial<Dependency> = {}): Dependency => ({
-  name: 'pkg', version: '1.0.0', direct: true, dev: false, reachable: true, importCount: 3, ...o,
+  name: 'pkg', version: '1.0.0', direct: true, dev: false, reachable: true, importCount: 3, children: [], peers: [], ...o,
 });
 const vuln = (o: Partial<Vulnerability> = {}): Vulnerability => ({
   id: 'GHSA-xxxx', aliases: [], cveIds: ['CVE-2099-0001'], summary: 'bad', severity: 'HIGH',
@@ -26,7 +26,7 @@ describe('lockfile', () => {
     expect(by.lodash).toMatchObject({ direct: true, reachable: true, importCount: 2 });
     expect(by['@acme/http']).toMatchObject({ direct: true, reachable: true });
     expect(by.moment).toMatchObject({ direct: true, reachable: false });
-    expect(by.minimist).toMatchObject({ direct: false, reachable: null });
+    expect(by.minimist).toMatchObject({ direct: false, reachable: true, via: '@acme/http' });
     expect(by['jest-mock-thing'].dev).toBe(true);
   });
 
@@ -84,6 +84,62 @@ describe('scoring', () => {
   });
 });
 
+describe('graph reachability (NestJS-style chain)', () => {
+  it('marks request-path packages reachable through the imported framework', () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        '': { dependencies: { '@nestjs/platform-express': '^11' }, devDependencies: { '@nestjs/cli': '^11' } },
+        'node_modules/@nestjs/platform-express': { version: '11.0.0', dependencies: { express: '^5', multer: '^2' } },
+        'node_modules/express': { version: '5.0.0', dependencies: { 'body-parser': '^2', 'proxy-addr': '^2' } },
+        'node_modules/multer': { version: '2.1.1' },
+        'node_modules/body-parser': { version: '2.2.2', dependencies: { qs: '^6' } },
+        'node_modules/qs': { version: '6.15.0' },
+        'node_modules/proxy-addr': { version: '2.0.7' },
+        'node_modules/@nestjs/cli': { version: '11.0.0', dev: true, dependencies: { handlebars: '^4' } },
+        'node_modules/handlebars': { version: '4.7.8', dev: true },
+      },
+    };
+    const deps = applyReachability(parseLockfile(lock), new Map([['@nestjs/platform-express', 1]]));
+    const by = Object.fromEntries(deps.map((d) => [d.name, d]));
+    for (const n of ['express', 'multer', 'body-parser', 'qs', 'proxy-addr'])
+      expect(by[n]).toMatchObject({ reachable: true, via: '@nestjs/platform-express' });
+    expect(by.handlebars).toMatchObject({ reachable: null, dev: true });
+
+    // multer DoS from the Pingbot run: HIGH, EPSS top 59% -> now RELEVANT (was 19)
+    const multer = assess(by.multer, vuln({ fixedVersions: { multer: ['2.3.0'] }, epss: { score: 0.006, percentile: 0.41 } }), { name: 'pingbot', internetFacing: true });
+    expect(multer.level).toBe('RELEVANT');
+    // handlebars critical but dev-only: stays quiet
+    const hb = assess(by.handlebars, vuln({ severity: 'CRITICAL', epss: { score: 0.02, percentile: 0.82 } }), { name: 'pingbot', internetFacing: true });
+    expect(hb.level).toBe('IRRELEVANT');
+  });
+});
+
+describe('runtime-loaded peers (real Pingbot shape)', () => {
+  it('follows @nestjs/core -> peer @nestjs/platform-express -> multer even when platform-express is never imported', () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        '': { dependencies: { '@nestjs/core': '^11', '@nestjs/platform-express': '^11' } },
+        'node_modules/@nestjs/core': { version: '11.1.17', dependencies: { 'path-to-regexp': '8' }, peerDependencies: { '@nestjs/platform-express': '^11' } },
+        'node_modules/@nestjs/platform-express': { version: '11.1.17', dependencies: { express: '5', multer: '2', 'path-to-regexp': '8' } },
+        'node_modules/express': { version: '5.0.0', dependencies: { 'body-parser': '2' } },
+        'node_modules/body-parser': { version: '2.2.2' },
+        'node_modules/multer': { version: '2.1.1' },
+        'node_modules/path-to-regexp': { version: '8.3.0' },
+      },
+    };
+    const deps = applyReachability(parseLockfile(lock), new Map([['@nestjs/core', 3]]));
+    const by = Object.fromEntries(deps.map((d) => [d.name, d]));
+    expect(by['@nestjs/platform-express']).toMatchObject({ reachable: true, loadedBy: '@nestjs/core' });
+    expect(by.multer).toMatchObject({ reachable: true, via: '@nestjs/platform-express' });
+    expect(by['body-parser']).toMatchObject({ reachable: true, via: '@nestjs/platform-express' });
+    expect(by['path-to-regexp']).toMatchObject({ reachable: true, via: '@nestjs/core' });
+    const a = assess(by['@nestjs/platform-express'], vuln({ fixedVersions: {} }), repo);
+    expect(a.reasons).toContain('loaded at runtime by @nestjs/core');
+  });
+});
+
 describe('osv normalize', () => {
   it('maps severity, CVE aliases and fixed versions', () => {
     const v = normalizeOsv({
@@ -129,9 +185,32 @@ describe('pipeline (mocked feeds)', () => {
     }) as typeof fetch;
 
     const r = await scanRepo(FIXTURE, repo, fake);
-    expect(r.findings.map((f) => f.dependency.name)).toEqual(['lodash', 'minimist', 'moment']);
-    expect(r.findings[0]).toMatchObject({ level: 'CRITICAL', fixVersion: '4.17.21' });
-    // moment is high severity with a high EPSS but never imported: pushed down the list
-    expect(r.findings[2].reasons).toContain('never imported in source');
+    const by = Object.fromEntries(r.findings.map((f) => [f.dependency.name, f]));
+    expect(by.lodash).toMatchObject({ level: 'CRITICAL', fixVersion: '4.17.21' });
+    // transitive, but pulled in by an imported package: still surfaces
+    expect(by.minimist.level).not.toBe('IRRELEVANT');
+    expect(by.minimist.reasons).toContain('pulled in by @acme/http (which you import)');
+    // moment is high severity with a high EPSS but never imported: last place
+    expect(r.findings.at(-1)!.dependency.name).toBe('moment');
+    expect(by.moment.reasons).toContain('never imported in source');
+  });
+});
+
+describe('attack paths', () => {
+  it('records the chain from your code through runtime-loaded peers', async () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        '': { dependencies: { '@nestjs/core': '^11', '@nestjs/platform-express': '^11' } },
+        'node_modules/@nestjs/core': { version: '11.1.17', peerDependencies: { '@nestjs/platform-express': '^11' } },
+        'node_modules/@nestjs/platform-express': { version: '11.1.17', dependencies: { express: '5' } },
+        'node_modules/express': { version: '5.0.0', dependencies: { 'body-parser': '2' } },
+        'node_modules/body-parser': { version: '2.2.2' },
+      },
+    };
+    const deps = applyReachability(parseLockfile(lock), new Map([['@nestjs/core', 1]]));
+    const by = Object.fromEntries(deps.map((d) => [d.name, d]));
+    expect(by['body-parser'].path).toEqual(['@nestjs/core', '@nestjs/platform-express', 'express', 'body-parser']);
+    expect(by['@nestjs/core'].path).toEqual(['@nestjs/core']);
   });
 });

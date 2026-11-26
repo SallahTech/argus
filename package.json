@@ -4,10 +4,11 @@
   "description": "A threat-intel machine for your dependencies: correlates OSV, CISA KEV, EPSS and your own code to tell you which vulnerability actually matters.",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc",
+    "setup": "npm install && npm --prefix web install",
+    "build": "tsc && npm --prefix web run build",
     "start": "node dist/main.js",
-    "dev": "ts-node src/main.ts",
-    "scan": "ts-node src/cli.ts",
+    "dev:web": "npm --prefix web run dev",
+    "scan": "node dist/cli.js",
     "test": "jest"
   },
   "license": "MIT",
@@ -21,7 +22,9 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "semver": "^7.8.6",
-    "typeorm": "^0.3.31"
+    "sql.js": "^1.17.0",
+    "typeorm": "^0.3.31",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

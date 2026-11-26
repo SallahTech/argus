@@ -18,6 +18,7 @@ services:
     volumes:
       # put the repos you want watched in ./repos, register them as /repos/<name>
       - ./repos:/repos:ro
+      - ./argus.config.json:/app/argus.config.json:ro
 
 volumes:
   pgdata:

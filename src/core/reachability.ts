@@ -53,13 +53,87 @@ export async function scanImports(repoPath: string): Promise<Map<string, number>
 }
 
 /**
- * Import-level reachability: a direct dependency nobody imports is far less
- * dangerous. Transitive deps stay `null` (unknown) in this MVP.
+ * Import-level reachability.
+ * - Direct deps: reachable if any source file imports them.
+ * - Transitive deps: reachable if an imported production dependency pulls
+ *   them in (walks the lockfile graph by package name). Otherwise unknown.
  */
 export function applyReachability(deps: Dependency[], imports: Map<string, number>): Dependency[] {
-  return deps.map((d) => {
-    if (!d.direct) return d;
+  const out = deps.map((d) => {
+    if (!d.direct) return { ...d };
     const count = imports.get(d.name) ?? 0;
     return { ...d, reachable: count > 0, importCount: count };
   });
+
+  const childrenOf = new Map<string, Set<string>>();
+  const peersOf = new Map<string, Set<string>>();
+  for (const d of out) {
+    const c = childrenOf.get(d.name) ?? new Set<string>();
+    d.children.forEach((x) => c.add(x));
+    childrenOf.set(d.name, c);
+    const p = peersOf.get(d.name) ?? new Set<string>();
+    d.peers.forEach((x) => p.add(x));
+    peersOf.set(d.name, p);
+  }
+  const directProd = new Map(out.filter((d) => d.direct && !d.dev).map((d) => [d.name, d]));
+
+  // BFS from every reachable production direct dependency. Then promote
+  // installed direct deps that a reachable package lists as a peer (loaded at
+  // runtime, never imported by you) and repeat until nothing changes.
+  // pathOf records the first chain we found from your code to each package.
+  const via = new Map<string, string>();
+  const pathOf = new Map<string, string[]>();
+  for (const d of directProd.values()) if (d.reachable) pathOf.set(d.name, [d.name]);
+  const walked = new Set<string>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const root of directProd.values()) {
+      if (!root.reachable || walked.has(root.name)) continue;
+      walked.add(root.name);
+      const rootPath = pathOf.get(root.name) ?? [root.name];
+      const queue = [...(childrenOf.get(root.name) ?? [])].map((name) => ({ name, parent: rootPath }));
+      while (queue.length) {
+        const { name, parent } = queue.shift()!;
+        if (via.has(name)) continue;
+        const asDirect = directProd.get(name);
+        if (asDirect) {
+          // a direct dep that a reachable package requires is reachable too
+          if (!asDirect.reachable) {
+            asDirect.reachable = true;
+            asDirect.loadedBy = parent[parent.length - 1];
+            pathOf.set(name, [...parent, name]);
+            changed = true;
+          }
+          continue;
+        }
+        via.set(name, root.name);
+        const path = [...parent, name];
+        pathOf.set(name, path);
+        queue.push(...[...(childrenOf.get(name) ?? [])].map((c) => ({ name: c, parent: path })));
+      }
+    }
+    for (const name of [...pathOf.keys()]) {
+      for (const peer of peersOf.get(name) ?? []) {
+        const d = directProd.get(peer);
+        if (d && !d.reachable) {
+          d.reachable = true;
+          d.loadedBy = name;
+          pathOf.set(peer, [...pathOf.get(name)!, peer]);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  for (const d of out) {
+    if (!d.direct && !d.dev) {
+      const root = via.get(d.name);
+      if (root) {
+        d.reachable = true;
+        d.via = root;
+      }
+    }
+    if (d.reachable && !d.dev) d.path = pathOf.get(d.name) ?? [d.name];
+  }
+  return out;
 }

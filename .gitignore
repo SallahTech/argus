@@ -2,3 +2,10 @@ node_modules
 dist
 .env
 coverage
+argus.sqlite
+argus.config.json
+web/node_modules
+web/dist
+.DS_Store
+.idea
+!test/fixtures/formats/yarn-classic/node_modules/
