@@ -55,6 +55,8 @@ export interface NumberDto {
   }[];
   /** every finding is ruled out by a feature check: installed, but not exploitable here */
   notExploitable: boolean;
+  /** lockfile format of the repo, so the fix uses the right package manager syntax */
+  lockfileFormat: string | null;
 }
 
 function numberId(repoId: string, pkgKey: string) {
@@ -222,6 +224,7 @@ export class ApiController {
           firstSeenAt: new Date(f.firstSeenAt).toISOString(),
           findings: [],
           notExploitable: true,
+          lockfileFormat: f.repository.lockfileFormat ?? null,
         };
         groups.set(id, n);
       }

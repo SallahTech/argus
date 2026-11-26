@@ -26,6 +26,8 @@ export class RepositoryEntity {
   @Column({ default: false }) internetFacing!: boolean;
   @Column({ type: 'int', default: 0 }) packageCount!: number;
   @Column({ type: 'int', default: 0 }) reachableCount!: number;
+  /** npm | pnpm | yarn-classic | yarn-berry, from the last scan */
+  @Column({ type: 'varchar', nullable: true }) lockfileFormat!: string | null;
   @Column({ type: DATE, nullable: true }) lastScannedAt!: Date | null;
   @Column({ type: 'simple-json', nullable: true }) graph!: ThreatGraph | null;
   @CreateDateColumn() createdAt!: Date;

@@ -30,8 +30,20 @@ export const ROOT = 'your code';
 export function buildGraph(deps: Dependency[], groups: ThreatGroup[], maxNodes = 80): ThreatGraph {
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, GraphEdge>();
-  const byName = new Map(deps.map((d) => [d.name, d]));
-  const groupByName = new Map(groups.map((g) => [g.name, g]));
+  // A package can be installed in several versions (yarn and pnpm often do).
+  // Match by name@version; only versions that actually run count.
+  const runs = (d?: Dependency) => !!d && !!d.reachable && !d.dev;
+  const byKey = new Map(deps.map((d) => [`${d.name}@${d.version}`, d]));
+  const reachableGroups = groups.filter((g) => runs(byKey.get(g.key)));
+
+  // per box (package name): the worst running version with findings, else any running version
+  const groupOf = new Map<string, ThreatGroup>();
+  for (const g of reachableGroups) {
+    const cur = groupOf.get(g.name);
+    if (!cur || g.score > cur.score) groupOf.set(g.name, g);
+  }
+  const runningVersion = new Map<string, Dependency>();
+  for (const d of deps) if (runs(d) && !runningVersion.has(d.name)) runningVersion.set(d.name, d);
 
   const addNode = (name: string, depth: number) => {
     const existing = nodes.get(name);
@@ -39,8 +51,8 @@ export function buildGraph(deps: Dependency[], groups: ThreatGroup[], maxNodes =
       existing.depth = Math.min(existing.depth, depth);
       return;
     }
-    const d = byName.get(name);
-    const g = groupByName.get(name);
+    const g = groupOf.get(name);
+    const d = g ? byKey.get(g.key) : runningVersion.get(name);
     nodes.set(name, {
       id: name,
       version: d?.version ?? null,
@@ -61,7 +73,6 @@ export function buildGraph(deps: Dependency[], groups: ThreatGroup[], maxNodes =
   nodes.set(ROOT, { id: ROOT, version: null, depth: 0, direct: false, level: null, score: 0, vulns: 0 });
 
   // threat paths first, worst first, so they survive the node cap
-  const reachableGroups = groups.filter((g) => byName.get(g.name)?.reachable && !byName.get(g.name)?.dev);
   for (const g of reachableGroups) {
     if (nodes.size + g.path.length > maxNodes && g.level === 'IRRELEVANT') continue;
     const chain = [ROOT, ...g.path];
@@ -69,14 +80,14 @@ export function buildGraph(deps: Dependency[], groups: ThreatGroup[], maxNodes =
     for (let i = 1; i < chain.length; i++) addEdge(chain[i - 1], chain[i], g.level);
   }
 
-  // then the rest of your direct, reachable production deps (observed, quiet)
-  const quiet = deps.filter((d) => d.direct && !d.dev && d.reachable && !nodes.has(d.name));
+  // then the rest of your direct, running production deps (observed, quiet)
+  const quiet = deps.filter((d) => d.direct && runs(d) && !nodes.has(d.name));
   for (const d of quiet) {
     if (nodes.size >= maxNodes) break;
     const parent = d.path && d.path.length > 1 ? d.path[d.path.length - 2] : ROOT;
-    addNode(d.name, nodes.has(parent) ? (nodes.get(parent)!.depth + 1) : 1);
+    addNode(d.name, nodes.has(parent) ? nodes.get(parent)!.depth + 1 : 1);
     addEdge(nodes.has(parent) ? parent : ROOT, d.name, null);
   }
-  const hidden = deps.filter((d) => d.reachable && !d.dev && !nodes.has(d.name)).length;
+  const hidden = new Set(deps.filter((d) => runs(d) && !nodes.has(d.name)).map((d) => d.name)).size;
   return { nodes: [...nodes.values()], edges: [...edges.values()], hidden };
 }
