@@ -53,7 +53,8 @@ export function assess(dep: Dependency, vuln: Vulnerability, repo: RepoContext):
     reasons.push(`exploited in the wild (CISA KEV since ${vuln.kev.dateAdded})`);
     if (vuln.kev.ransomware) reasons.push('used in ransomware campaigns');
   } else if (vuln.epss) {
-    exploit = 0.15 + 0.75 * vuln.epss.percentile;
+    // floor of 0.35: fresh CVEs start with low EPSS, and "nobody exploits it yet" is not "safe"
+    exploit = 0.35 + 0.65 * vuln.epss.percentile;
     reasons.push(
       `EPSS ${(vuln.epss.score * 100).toFixed(1)}% (top ${Math.max(1, Math.round((1 - vuln.epss.percentile) * 100))}%)`,
     );
@@ -63,16 +64,27 @@ export function assess(dep: Dependency, vuln: Vulnerability, repo: RepoContext):
   }
 
   // 3. Exposure
-  let exposure = dep.direct ? 1 : 0.6;
-  reasons.push(dep.direct ? 'direct dependency' : 'transitive dependency');
+  let exposure: number;
+  if (dep.direct) {
+    exposure = 1;
+    reasons.push('direct dependency');
+  } else if (dep.via) {
+    exposure = 0.85;
+    reasons.push(`pulled in by ${dep.via} (which you import)`);
+  } else {
+    exposure = 0.6;
+    reasons.push('transitive dependency');
+  }
   if (dep.dev) {
     exposure *= 0.3;
     reasons.push('dev-only');
   } else {
     reasons.push('ships to production');
   }
-  if (dep.reachable === true) reasons.push(`imported in ${dep.importCount} file${dep.importCount === 1 ? '' : 's'}`);
-  else if (dep.reachable === false) {
+  if (dep.reachable === true) {
+    if (dep.direct && dep.loadedBy) reasons.push(`loaded at runtime by ${dep.loadedBy}`);
+    else if (dep.direct) reasons.push(`imported in ${dep.importCount} file${dep.importCount === 1 ? '' : 's'}`);
+  } else if (dep.reachable === false) {
     exposure *= 0.4;
     reasons.push('never imported in source');
   } else exposure *= 0.8;

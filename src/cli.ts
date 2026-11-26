@@ -7,7 +7,7 @@ async function main() {
   const args = process.argv.slice(2);
   const target = args.find((a) => !a.startsWith('--'));
   if (!target) {
-    console.error('usage: argus <path-to-repo> [--internet-facing] [--all] [--json]');
+    console.error('usage: argus <path-to-repo> [--internet-facing] [--all] [--json]\n  reads package-lock.json, pnpm-lock.yaml or yarn.lock (classic or berry)');
     process.exit(2);
   }
   const repoPath = path.resolve(target);

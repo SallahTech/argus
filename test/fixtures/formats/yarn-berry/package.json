@@ -1,0 +1,15 @@
+{
+  "name": "lf-demo",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@nestjs/common": "11.1.17",
+    "@nestjs/core": "11.1.17",
+    "@nestjs/platform-express": "11.1.17",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "handlebars": "4.7.8"
+  }
+}
