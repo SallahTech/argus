@@ -111,12 +111,16 @@ function FeatureChecks({ file }: { file: CaseFile }) {
   );
 }
 
-function fixSnippet(c: CaseFile): string | null {
+/** The fix in the project's own package manager syntax. */
+export function fixSnippet(c: Pick<CaseFile, 'name' | 'fixVersion' | 'path' | 'lockfileFormat'>): string | null {
   if (!c.fixVersion) return null;
+  const pm = c.lockfileFormat?.startsWith('yarn') ? 'yarn' : c.lockfileFormat === 'pnpm' ? 'pnpm' : 'npm';
   const direct = c.path.length === 1;
-  return direct
-    ? `npm install ${c.name}@${c.fixVersion}`
-    : `// package.json\n"overrides": {\n  "${c.name}": "^${c.fixVersion}"\n}`;
+  if (direct) return pm === 'npm' ? `npm install ${c.name}@${c.fixVersion}` : `${pm} add ${c.name}@${c.fixVersion}`;
+  const pin = `"${c.name}": "^${c.fixVersion}"`;
+  if (pm === 'yarn') return `// package.json, then: yarn install\n"resolutions": {\n  ${pin}\n}`;
+  if (pm === 'pnpm') return `// package.json, then: pnpm install\n"pnpm": {\n  "overrides": {\n    ${pin}\n  }\n}`;
+  return `// package.json, then: npm install\n"overrides": {\n  ${pin}\n}`;
 }
 
 export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () => void }) {

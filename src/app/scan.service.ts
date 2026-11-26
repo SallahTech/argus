@@ -164,6 +164,7 @@ export class ScanService {
 
     const groups = groupFindings(result.findings);
     repo.graph = buildGraph(result.dependencies, groups);
+    repo.lockfileFormat = result.lockfile.format;
     repo.packageCount = result.dependencies.length;
     repo.reachableCount = result.dependencies.filter((d) => d.reachable && !d.dev).length;
     repo.lastScannedAt = new Date();

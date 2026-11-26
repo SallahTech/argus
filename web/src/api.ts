@@ -87,6 +87,7 @@ export interface ThreatNumber {
   firstSeenAt: string;
   findings: Finding[];
   notExploitable: boolean;
+  lockfileFormat: string | null;
 }
 
 export interface CaseFile extends ThreatNumber {
