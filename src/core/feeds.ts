@@ -119,15 +119,17 @@ export async function fetchKev(
 
 // ---------- FIRST EPSS ----------
 
+/** EPSS scores today, or as published on a past `date` (YYYY-MM-DD). */
 export async function fetchEpss(
   cves: string[],
   f: FetchFn = fetch,
+  date?: string,
 ): Promise<Map<string, { score: number; percentile: number }>> {
   const out = new Map<string, { score: number; percentile: number }>();
   for (const batch of chunk([...new Set(cves)], 50)) {
     const res = await json<{ data: { cve: string; epss: string; percentile: string }[] }>(
       f,
-      `${EPSS_URL}?cve=${batch.join(',')}`,
+      `${EPSS_URL}?cve=${batch.join(',')}${date ? `&date=${date}` : ''}`,
     );
     for (const d of res.data) out.set(d.cve, { score: +d.epss, percentile: +d.percentile });
   }
