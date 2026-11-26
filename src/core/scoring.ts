@@ -1,5 +1,5 @@
 import * as semver from 'semver';
-import { Assessment, Dependency, RepoContext, Severity, ThreatLevel, Vulnerability } from './types';
+import { Assessment, Dependency, FeatureCheck, RepoContext, Severity, ThreatLevel, Vulnerability } from './types';
 
 export const THRESHOLDS = { critical: 70, relevant: 40 };
 
@@ -28,7 +28,7 @@ export function levelFor(score: number): ThreatLevel {
  * Every factor that moves the score is recorded as a human-readable reason,
  * so each alert explains itself.
  */
-export function assess(dep: Dependency, vuln: Vulnerability, repo: RepoContext): Assessment {
+export function assess(dep: Dependency, vuln: Vulnerability, repo: RepoContext, check?: FeatureCheck): Assessment {
   const reasons: string[] = [];
   const fixVersion = pickFixVersion(dep.version, vuln.fixedVersions[dep.name]);
 
@@ -88,9 +88,23 @@ export function assess(dep: Dependency, vuln: Vulnerability, repo: RepoContext):
     exposure *= 0.4;
     reasons.push('never imported in source');
   } else exposure *= 0.8;
-  if (repo.internetFacing && !dep.dev) {
+  if (repo.internetFacing && !dep.dev && check?.status !== 'unused') {
     exposure = Math.min(1, exposure * 1.15);
     reasons.push('internet-facing app');
+  }
+
+  // 4. Feature-level reachability: is the vulnerable part actually used?
+  if (check?.status === 'unused') {
+    if (vuln.kev && check.kind === 'feature') {
+      // never fully silence an actively exploited CVE on a code heuristic
+      exposure *= 0.55;
+      reasons.push(`${check.detail} (exploited in the wild, so kept visible: verify)`);
+    } else {
+      exposure *= check.kind === 'build-time' ? 0.3 : 0.25;
+      reasons.push(check.detail);
+    }
+  } else if (check?.status === 'used') {
+    reasons.push(check.detail);
   }
 
   const score = Math.round(100 * sev * exploit * exposure);

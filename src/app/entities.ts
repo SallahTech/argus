@@ -8,10 +8,10 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { ThreatGraph } from '../core/graph';
-import { Dependency, Severity, ThreatLevel } from '../core/types';
+import { Dependency, FeatureCheck, Severity, ThreatLevel } from '../core/types';
 
 /** What the scorer needs to know about a dependency, kept so intel sweeps can rescore without a rescan. */
-export type ExposureSnapshot = Pick<Dependency, 'direct' | 'dev' | 'reachable' | 'importCount' | 'via' | 'loadedBy'>;
+export type ExposureSnapshot = Pick<Dependency, 'direct' | 'dev' | 'reachable' | 'importCount' | 'via' | 'loadedBy' | 'buildTimeOnly' | 'buildTool'>;
 
 /** Postgres in Docker, SQLite file locally. Keep column types portable. */
 export const USE_POSTGRES = !!process.env.DATABASE_URL;
@@ -54,6 +54,8 @@ export class FindingEntity {
   @Column({ type: 'varchar', nullable: true }) published!: string | null;
   @Column({ default: false }) malicious!: boolean;
   @Column({ type: 'simple-json', nullable: true }) exposure!: ExposureSnapshot | null;
+  /** feature-level reachability: is the vulnerable part of the package used here? */
+  @Column({ type: 'simple-json', nullable: true }) check!: FeatureCheck | null;
   @Column({ type: 'varchar', default: 'open' }) status!: 'open' | 'resolved';
   /** highest level we already sent an alert for, so we only re-alert on escalation */
   @Column({ type: 'varchar', nullable: true }) alertedLevel!: ThreatLevel | null;

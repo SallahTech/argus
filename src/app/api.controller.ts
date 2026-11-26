@@ -16,7 +16,7 @@ import * as semver from 'semver';
 import { map, Observable } from 'rxjs';
 import { Repository } from 'typeorm';
 import { LEVEL_RANK } from '../core/group';
-import { ThreatLevel } from '../core/types';
+import { FeatureCheck, ThreatLevel } from '../core/types';
 import { FindingEntity, RepositoryEntity } from './entities';
 import { EventsService } from './events.service';
 import { ScanService } from './scan.service';
@@ -50,8 +50,11 @@ export interface NumberDto {
     kevDateAdded: string | null;
     published: string | null;
     malicious: boolean;
+    check: FeatureCheck | null;
     scoreHistory: { at: string; score: number }[];
   }[];
+  /** every finding is ruled out by a feature check: installed, but not exploitable here */
+  notExploitable: boolean;
 }
 
 function numberId(repoId: string, pkgKey: string) {
@@ -218,6 +221,7 @@ export class ApiController {
           unfixed: 0,
           firstSeenAt: new Date(f.firstSeenAt).toISOString(),
           findings: [],
+          notExploitable: true,
         };
         groups.set(id, n);
       }
@@ -235,8 +239,10 @@ export class ApiController {
         kevDateAdded: f.kevDateAdded,
         published: f.published,
         malicious: f.malicious,
+        check: f.check ?? null,
         scoreHistory: f.scoreHistory,
       });
+      if (f.check?.status !== 'unused') n.notExploitable = false;
       if (f.score > n.score) n.score = f.score;
       if (LEVEL_RANK[f.level] > LEVEL_RANK[n.level]) n.level = f.level;
       if (new Date(f.firstSeenAt).toISOString() < n.firstSeenAt) n.firstSeenAt = new Date(f.firstSeenAt).toISOString();

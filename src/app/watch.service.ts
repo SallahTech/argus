@@ -120,7 +120,7 @@ export class WatchService implements OnModuleInit, OnModuleDestroy {
       kev: k ?? (f.kevDateAdded ? { dateAdded: f.kevDateAdded, ransomware: false } : undefined),
       epss: e ?? (f.epss != null ? { score: f.epss, percentile: f.epssPercentile ?? 0 } : undefined),
     };
-    const a = assess(dep, vuln, { name: f.repository.name, internetFacing: f.repository.internetFacing });
+    const a = assess(dep, vuln, { name: f.repository.name, internetFacing: f.repository.internetFacing }, f.check ?? undefined);
     const newlyExploited = !!k && !f.kevDateAdded;
     f.epss = vuln.epss?.score ?? null;
     f.epssPercentile = vuln.epss?.percentile ?? null;

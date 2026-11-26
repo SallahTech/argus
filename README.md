@@ -2,6 +2,9 @@
 
 **A machine that watches your dependencies.** Your audit tool lists 88 vulnerabilities. Argus finds the 4 that can actually reach production, draws the path from your code to each one, and tells you which one to fix first.
 
+![Argus Machine view: attack paths from your code to vulnerable packages, with a case file open](docs/machine-view.png)
+<sub>Machine view running on a sample NestJS project with simulated feed data.</sub>
+
 Argus combines signals that normally live in separate tools:
 
 | Signal | Source | Question it answers |
@@ -39,6 +42,24 @@ your code → @nestjs/core → @nestjs/platform-express → express → body-par
 ```
 
 On a real NestJS service, this took the result from "88 vulnerabilities, 0 relevant" (too quiet) to "4 packages on the request path that matter", with dev tooling correctly kept quiet.
+
+## Feature-level reachability
+
+A vulnerability lives in one *feature* of a package. Argus checks whether your code uses that feature:
+
+| Package | Vulnerable feature | Used when |
+|---|---|---|
+| multer | multipart upload parsing | `FileInterceptor`, `multer()` |
+| proxy-addr | proxy header trust | `trust proxy` is set |
+| path-to-regexp | optional groups / wildcards | a route uses `{ }` or `*` |
+| next | middleware, image optimizer, server actions | `middleware`/`proxy` file, `next/image`, `"use server"` |
+| sharp (under next) | image processing | `next/image` or images config |
+| lodash | `_.template` | `_.template` is called |
+| qs | comma / allowDots options | those options are set |
+
+Packages reachable **only through build tools** (postcss, tailwind, webpack, esbuild…) never run in production and are ruled out too. For example, `next → postcss → nanoid` is build time only.
+
+Rules only exist where the answer is reliable. No rule means no claim. Each check carries file:line evidence, and a CVE that is **exploited in the wild** is softened but never silenced. On a real NestJS service this took the result from 88 vulnerabilities to **1** that needs attention.
 
 ## The Machine view
 
@@ -106,6 +127,7 @@ src/core/     the engine, shared by the CLI and the server (no framework code)
   lockfiles/       npm, pnpm, yarn (classic + berry) -> one dependency graph
   reachability.ts  imports + graph walk + runtime-loaded peers -> attack paths
   feeds.ts         OSV, CISA KEV and EPSS clients
+  features.ts      feature rules: is the vulnerable part of a package actually used?
   scoring.ts       the scoring model and its reasons
   group.ts         findings -> one "number" per package
   graph.ts         the Machine view graph
@@ -119,7 +141,7 @@ web/          the Machine view (React + Vite)
 - [x] Machine view, numbers, case files, live feed
 - [x] Watch loop: intel sweeps, lockfile watcher, hourly rescan
 - [x] pnpm and Yarn (Classic + Berry) lockfiles, monorepos
-- [ ] **Feature-level reachability:** multer only matters if you use `FileInterceptor`, proxy-addr only with `trust proxy`
+- [x] Feature-level reachability + build-time-only detection
 - [ ] **Chatter layer:** public PoC repos, HN, r/netsec and Mastodon infosec, triaged by an LLM
 - [ ] **Time machine:** replay history to measure how early Argus would have flagged a CVE before KEV
 - [ ] **Admin mode:** open the upgrade PR automatically

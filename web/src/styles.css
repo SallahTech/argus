@@ -196,3 +196,17 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   .feed { grid-row: 3; }
   .stats { display: none; }
 }
+
+/* ---------- feature check ---------- */
+.pill-safe { color: var(--white); border-style: dashed; opacity: .8; }
+.check { border: 1px solid var(--line); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.check-unused { border-style: dashed; }
+.check-used { border-color: currentColor; }
+.case.c-yellow .check-used { color: var(--yellow); }
+.case.c-red .check-used { color: var(--red); }
+.check-head { display: flex; gap: 8px; font-weight: 700; color: inherit; }
+.check-unused .check-head { color: var(--white); }
+.check-mark { width: 14px; text-align: center; }
+.check-detail { color: #bdbdbd; line-height: 1.5; }
+.check-ev { color: var(--yellow); font-size: 11px; background: #000; padding: 2px 6px; align-self: flex-start; }
+.check-unused .check-ev { color: var(--muted); }
