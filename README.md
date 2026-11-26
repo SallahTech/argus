@@ -99,6 +99,21 @@ node dist/cli.js ../your-app --json
 
 It exits with code `1` when something is CRITICAL, so you can use it to gate CI.
 
+## Time machine
+
+```bash
+node dist/cli.js history ../your-app --internet-facing            # last 365 days
+node dist/cli.js history ../your-app --since 2025-01-01 --json
+```
+
+Replays the git history of your lockfile against **what was known on each day**: advisories published by then, EPSS scores as they were published that day, and CISA KEV listings by their date added. It answers:
+
+- **Lead time:** how many days before CISA confirmed exploitation Argus would have flagged each CVE
+- **Time to fix:** how long each relevant finding stayed installed before you upgraded
+- **Still open:** what is relevant now, and for how long
+
+Nothing from the future leaks into a past day: a CVE disclosed later is invisible before its publish date, and a KEV listing after the replay window is unknown. Reachability and feature checks use your code as it is today.
+
 ## Docker (Postgres)
 
 ```bash
@@ -130,6 +145,7 @@ src/core/     the engine, shared by the CLI and the server (no framework code)
   features.ts      feature rules: is the vulnerable part of a package actually used?
   scoring.ts       the scoring model and its reasons
   group.ts         findings -> one "number" per package
+  history/         time machine: lockfile git history replayed against past intel
   graph.ts         the Machine view graph
 src/app/      NestJS: entities, scanner, event feed, API, Telegram
 web/          the Machine view (React + Vite)
@@ -143,5 +159,6 @@ web/          the Machine view (React + Vite)
 - [x] pnpm and Yarn (Classic + Berry) lockfiles, monorepos
 - [x] Feature-level reachability + build-time-only detection
 - [ ] **Chatter layer:** public PoC repos, HN, r/netsec and Mastodon infosec, triaged by an LLM
-- [ ] **Time machine:** replay history to measure how early Argus would have flagged a CVE before KEV
+- [x] Time machine: lead time before KEV, time to fix (`argus history`)
+- [ ] Timeline scrubber in the Machine view
 - [ ] **Admin mode:** open the upgrade PR automatically
