@@ -1,3 +1,4 @@
+import { fixLabel } from './countermeasure';
 import { groupFindings } from './group';
 import { ScanResult } from './pipeline';
 import { ThreatLevel } from './types';
@@ -48,7 +49,7 @@ export function renderReport(r: ScanResult, opts: { showAll?: boolean } = {}): s
     const fix = v.malicious
       ? 'REMOVE NOW'
       : g.fixVersion
-        ? `upgrade to ${g.fixVersion}${count > 1 ? ` (fixes ${count - g.unfixed} of ${count})` : ''}`
+        ? `${fixLabel(g.name, g.fixVersion, g.path, g.findings[0].dependency.direct)}${count > 1 ? ` (fixes ${count - g.unfixed} of ${count})` : ''}`
         : 'no fix yet';
     lines.push('');
     lines.push(

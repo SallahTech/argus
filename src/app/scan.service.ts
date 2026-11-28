@@ -8,6 +8,7 @@ import { scanRepo } from '../core/pipeline';
 import { AlertService } from './alert.service';
 import { FindingEntity, RepositoryEntity } from './entities';
 import { EventsService } from './events.service';
+import { repoContext } from './repo-context';
 
 @Injectable()
 export class ScanService {
@@ -61,7 +62,7 @@ export class ScanService {
     await this.events.emit({ ...base, type: 'SCAN_START', message: `Observing ${repo.name}` });
     let result;
     try {
-      result = await scanRepo(repo.path, { name: repo.name, internetFacing: repo.internetFacing }, fetch, (step, detail) =>
+      result = await scanRepo(repo.path, repoContext(repo), fetch, (step, detail) =>
         void this.events.emit({ ...base, type: 'SCAN_STEP', message: `${step.toUpperCase()} ${detail}` }),
       );
     } catch (e) {

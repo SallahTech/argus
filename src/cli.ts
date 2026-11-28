@@ -4,9 +4,10 @@ import { renderHistory } from './core/history/render';
 import { replayHistory } from './core/history/replay';
 import { scanRepo } from './core/pipeline';
 import { renderReport } from './core/report';
+import { detectPlatform } from './core/platform';
 
 const USAGE = `usage:
-  argus <path-to-repo> [--internet-facing] [--all] [--json]
+  argus <path-to-repo> [--internet-facing] [--platform linux|windows|macos] [--all] [--json]
       threat assessment of the project as it is now
   argus history <path-to-repo> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--internet-facing] [--json]
       time machine: replay the lockfile's git history against what was known each day
@@ -23,14 +24,21 @@ async function main() {
   const args = process.argv.slice(2);
   const history = args[0] === 'history';
   const rest = history ? args.slice(1) : args;
-  const valued = new Set(['--since', '--until']);
+  const valued = new Set(['--since', '--until', '--platform']);
   const target = rest.find((a, i) => !a.startsWith('--') && !valued.has(rest[i - 1]));
   if (!target) {
     console.error(USAGE);
     process.exit(2);
   }
   const repoPath = path.resolve(target);
-  const repo = { name: path.basename(repoPath), internetFacing: rest.includes('--internet-facing') };
+  const forced = flag(rest, '--platform') as 'linux' | 'windows' | 'macos' | undefined;
+  const detected = forced ? { platform: forced, source: '--platform' } : detectPlatform(repoPath);
+  const repo = {
+    name: path.basename(repoPath),
+    internetFacing: rest.includes('--internet-facing'),
+    platform: detected?.platform,
+    platformSource: detected?.source,
+  };
   const json = rest.includes('--json');
 
   if (history) {

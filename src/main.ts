@@ -10,16 +10,17 @@ import { join, resolve } from 'path';
 import { Repository } from 'typeorm';
 import { AlertService } from './app/alert.service';
 import { ApiController } from './app/api.controller';
-import { EventEntity, FindingEntity, RepositoryEntity, USE_POSTGRES } from './app/entities';
+import { EventEntity, FindingEntity, HistoryCacheEntity, RepositoryEntity, USE_POSTGRES } from './app/entities';
 import { EventsService } from './app/events.service';
 import { ScanService } from './app/scan.service';
 import { WatchService } from './app/watch.service';
+import { HistoryService } from './app/history.service';
 
-const ENTITIES = [RepositoryEntity, FindingEntity, EventEntity];
+const ENTITIES = [RepositoryEntity, FindingEntity, EventEntity, HistoryCacheEntity];
 const ROOT = resolve(__dirname, '..');
 
 interface ArgusConfig {
-  repos: { name: string; path: string; internetFacing?: boolean }[];
+  repos: { name: string; path: string; internetFacing?: boolean; platform?: 'linux' | 'windows' | 'macos' }[];
 }
 
 /** Registers repos from argus.config.json and starts the first scan on boot. */
@@ -29,6 +30,7 @@ class Bootstrapper implements OnApplicationBootstrap {
   constructor(
     @InjectRepository(RepositoryEntity) private readonly repos: Repository<RepositoryEntity>,
     private readonly scanner: ScanService,
+    private readonly history: HistoryService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -38,11 +40,16 @@ class Bootstrapper implements OnApplicationBootstrap {
       for (const r of cfg.repos ?? []) {
         const path = r.path.replace(/^~(?=$|\/)/, homedir());
         const existing = await this.repos.findOneBy({ name: r.name });
-        await this.repos.save({ ...(existing ?? {}), name: r.name, path, internetFacing: !!r.internetFacing });
+        await this.repos.save({ ...(existing ?? {}), name: r.name, path, internetFacing: !!r.internetFacing, platform: r.platform ?? null });
       }
       this.log.log(`watching ${cfg.repos?.length ?? 0} repos from ${file}`);
     }
-    if (process.env.SCAN_ON_BOOT !== 'false') setTimeout(() => void this.scanner.scanAll(), 1500);
+    if (process.env.SCAN_ON_BOOT !== 'false')
+      setTimeout(async () => {
+        await this.scanner.scanAll();
+        // then prepare the time machine in the background, so TIME MACHINE opens instantly
+        void this.history.warm(await this.repos.find());
+      }, 1500);
   }
 }
 
@@ -58,7 +65,7 @@ class Bootstrapper implements OnApplicationBootstrap {
     TypeOrmModule.forFeature(ENTITIES),
   ],
   controllers: [ApiController],
-  providers: [ScanService, WatchService, AlertService, EventsService, Bootstrapper],
+  providers: [ScanService, WatchService, HistoryService, AlertService, EventsService, Bootstrapper],
 })
 class AppModule {}
 

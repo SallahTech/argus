@@ -1,6 +1,6 @@
 {
   "repos": [
-    { "name": "my-api", "path": "~/projects/my-api", "internetFacing": true },
+    { "name": "my-api", "path": "~/projects/my-api", "internetFacing": true, "platform": "linux" },
     { "name": "my-frontend", "path": "~/projects/my-frontend", "internetFacing": false }
   ]
 }

@@ -32,7 +32,7 @@ export interface Dependency {
  */
 export interface FeatureCheck {
   status: 'used' | 'unused';
-  kind: 'feature' | 'build-time';
+  kind: 'feature' | 'build-time' | 'platform';
   /** e.g. "file uploads (multer)" */
   feature: string;
   /** one line a human can read in an alert */
@@ -60,6 +60,10 @@ export interface Vulnerability {
 export interface RepoContext {
   name: string;
   internetFacing: boolean;
+  /** OS the app is deployed on, from config or detected; undefined = unknown */
+  platform?: 'linux' | 'windows' | 'macos';
+  /** where the platform came from, shown in explanations */
+  platformSource?: string;
 }
 
 export interface Assessment {

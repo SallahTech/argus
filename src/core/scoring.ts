@@ -95,12 +95,12 @@ export function assess(dep: Dependency, vuln: Vulnerability, repo: RepoContext, 
 
   // 4. Feature-level reachability: is the vulnerable part actually used?
   if (check?.status === 'unused') {
-    if (vuln.kev && check.kind === 'feature') {
+    if (vuln.kev && check.kind !== 'build-time') {
       // never fully silence an actively exploited CVE on a code heuristic
       exposure *= 0.55;
       reasons.push(`${check.detail} (exploited in the wild, so kept visible: verify)`);
     } else {
-      exposure *= check.kind === 'build-time' ? 0.3 : 0.25;
+      exposure *= check.kind === 'build-time' ? 0.3 : check.kind === 'platform' ? 0.15 : 0.25;
       reasons.push(check.detail);
     }
   } else if (check?.status === 'used') {

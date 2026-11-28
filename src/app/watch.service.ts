@@ -11,6 +11,7 @@ import { AlertService } from './alert.service';
 import { FindingEntity, RepositoryEntity } from './entities';
 import { EventsService } from './events.service';
 import { ScanService } from './scan.service';
+import { repoContext } from './repo-context';
 
 const minutes = (v: string | undefined, def: number) => (Number(v) > 0 ? Number(v) : def) * 60_000;
 
@@ -120,7 +121,7 @@ export class WatchService implements OnModuleInit, OnModuleDestroy {
       kev: k ?? (f.kevDateAdded ? { dateAdded: f.kevDateAdded, ransomware: false } : undefined),
       epss: e ?? (f.epss != null ? { score: f.epss, percentile: f.epssPercentile ?? 0 } : undefined),
     };
-    const a = assess(dep, vuln, { name: f.repository.name, internetFacing: f.repository.internetFacing }, f.check ?? undefined);
+    const a = assess(dep, vuln, repoContext(f.repository), f.check ?? undefined);
     const newlyExploited = !!k && !f.kevDateAdded;
     f.epss = vuln.epss?.score ?? null;
     f.epssPercentile = vuln.epss?.percentile ?? null;

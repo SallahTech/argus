@@ -52,10 +52,13 @@ A vulnerability lives in one *feature* of a package. Argus checks whether your c
 | multer | multipart upload parsing | `FileInterceptor`, `multer()` |
 | proxy-addr | proxy header trust | `trust proxy` is set |
 | path-to-regexp | optional groups / wildcards | a route uses `{ }` or `*` |
-| next | middleware, image optimizer, server actions | `middleware`/`proxy` file, `next/image`, `"use server"` |
+| next | middleware, image optimizer, server actions, WebSocket upgrades, Cache Components, `use cache`, rewrites, Edge runtime | the matching file, import, directive or `next.config` option |
+| next | Windows-only bugs | the app is hosted on Windows |
 | sharp (under next) | image processing | `next/image` or images config |
 | lodash | `_.template` | `_.template` is called |
 | qs | comma / allowDots options | those options are set |
+
+Some vulnerabilities depend on **where the app runs**, for example a Next.js RCE that only exists on Windows-hosted servers. Argus reads the platform from `argus.config.json` (`"platform": "linux"`), or detects it from deployment files (railway.json, vercel.json, Dockerfile, fly.toml…). When the platform is unknown, it makes no claim.
 
 Packages reachable **only through build tools** (postcss, tailwind, webpack, esbuild…) never run in production and are ruled out too. For example, `next → postcss → nanoid` is build time only.
 
@@ -73,8 +76,8 @@ npm start                          # → http://localhost:3000
 No Docker or database needed: locally it stores everything in `argus.sqlite`.
 
 - **Machine view:** every reachable package in a bracket box. White means observed, yellow means relevant, red means threat. Threat paths light up from your code, and hovering a node traces its path.
-- **Numbers:** one case per package (`#855-91-8104`) that groups all of its CVEs under one fix.
-- **Case file:** assessment, attack path, the reasons behind the score, a timeline (disclosed, exploited, first observed, escalated), and a copy-paste countermeasure (`npm install` or an `overrides` block).
+- **Numbers:** one case per package (`CASE-40217`) that groups all of its CVEs under one fix.
+- **Case file:** assessment, attack path, the reasons behind the score, a timeline (disclosed, exploited, first observed, escalated), and a copy-paste countermeasure in your package manager's syntax. For a transitive package it names the direct dependency that pulls it in, and pins the fix under that dependency only.
 - **Live feed:** every scan step and every new, escalated or resolved number, streamed over SSE.
 
 ### Always watching
@@ -112,6 +115,10 @@ Replays the git history of your lockfile against **what was known on each day**:
 - **Time to fix:** how long each relevant finding stayed installed before you upgraded
 - **Still open:** what is relevant now, and for how long
 
+In the dashboard, switch the Machine view from **LIVE** to **TIME MACHINE** to scrub through the year: boxes turn yellow when a CVE is disclosed, red when CISA confirms exploitation, and go quiet the day you upgraded. Press play (or space) to watch it unfold, and use the arrow keys to step. The panel shows the median lead time and time to fix, and clicking a row jumps to that day.
+
+Replays are cached in the database and prepared right after the boot scan, so TIME MACHINE opens instantly. When the lockfile changes or a day passes, you see the last replay immediately while a fresh one runs in the background.
+
 Nothing from the future leaks into a past day: a CVE disclosed later is invisible before its publish date, and a KEV listing after the replay window is unknown. Reachability and feature checks use your code as it is today.
 
 ## Docker (Postgres)
@@ -130,6 +137,7 @@ docker compose up -d --build
 | `GET /api/repos/:id/graph` | Machine view graph (nodes, edges, threat levels) |
 | `GET /api/numbers?level=all&repo=` | grouped numbers, worst first |
 | `GET /api/numbers/:id` | case file with timeline |
+| `GET /api/repos/:id/history` | time machine: summary, per-CVE history, Machine view frames (cached 6h, `?refresh=1`) |
 | `GET /api/events`, `GET /api/events/stream` | live feed (SSE) |
 | `POST /api/scan`, `POST /api/repos/:id/scan` | scan now |
 | `POST /api/sweep` | pull fresh KEV + EPSS and rescore now |
@@ -160,5 +168,5 @@ web/          the Machine view (React + Vite)
 - [x] Feature-level reachability + build-time-only detection
 - [ ] **Chatter layer:** public PoC repos, HN, r/netsec and Mastodon infosec, triaged by an LLM
 - [x] Time machine: lead time before KEV, time to fix (`argus history`)
-- [ ] Timeline scrubber in the Machine view
+- [x] Timeline scrubber in the Machine view
 - [ ] **Admin mode:** open the upgrade PR automatically

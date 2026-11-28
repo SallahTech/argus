@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Graph, GraphNode, Level } from './api';
 
@@ -110,12 +111,51 @@ function useFit(width: number, height: number) {
   const fitW = box.w / width;
   const fitBoth = Math.min(fitW, box.h / height);
   // if fitting the height would shrink text too much, fit the width and scroll instead
-  const scale = box.w ? Math.min(MAX_ZOOM, fitBoth > 0.75 * Math.min(fitW, 1) ? fitBoth : Math.min(fitW, 1)) : 1;
+  const MIN_SCALE = 0.62; // below this the labels are unreadable: scroll inside the panel instead
+  const scale = box.w ? Math.max(MIN_SCALE, Math.min(MAX_ZOOM, fitBoth > 0.75 * Math.min(fitW, 1) ? fitBoth : Math.min(fitW, 1))) : 1;
   return { ref, scale };
 }
 
-export function ThreatGraph({ graph, scanning, onSelect }: { graph: Graph; scanning: boolean; onSelect: (pkg: string) => void }) {
-  const { placed, width, height } = useMemo(() => layout(graph), [graph]);
+/** Union of several graphs: every box that ever appears, so positions stay put while scrubbing. */
+export function unionGraph(graphs: Graph[]): Graph {
+  const nodes = new Map<string, GraphNode>();
+  const edges = new Map<string, Graph['edges'][number]>();
+  for (const g of graphs) {
+    for (const n of g.nodes) {
+      const cur = nodes.get(n.id);
+      if (!cur) nodes.set(n.id, { ...n });
+      else {
+        cur.depth = Math.min(cur.depth, n.depth);
+        if (n.level && !cur.level) cur.level = n.level; // ever had findings -> full-size box
+      }
+    }
+    for (const e of g.edges) edges.set(`${e.from}>${e.to}`, e);
+  }
+  return { nodes: [...nodes.values()], edges: [...edges.values()], hidden: 0 };
+}
+
+export function ThreatGraph({
+  graph,
+  layoutGraph,
+  scanning,
+  onSelect,
+}: {
+  graph: Graph;
+  /** lay out this (bigger) graph instead, and draw `graph` on top of it: stable positions across frames */
+  layoutGraph?: Graph;
+  scanning: boolean;
+  onSelect: (pkg: string) => void;
+}) {
+  const { placed: base, width, height } = useMemo(() => layout(layoutGraph ?? graph), [layoutGraph, graph]);
+  // positions from the layout graph, everything else (level, score, version) from the current graph
+  const placed = useMemo(() => {
+    const m = new Map<string, Placed>();
+    for (const n of graph.nodes) {
+      const p = base.get(n.id);
+      if (p) m.set(n.id, { ...n, x: p.x, y: p.y, h: p.h, w: p.w });
+    }
+    return m;
+  }, [base, graph]);
   const { ref, scale } = useFit(width, height);
   const [hover, setHover] = useState<string | null>(null);
 
@@ -135,7 +175,14 @@ export function ThreatGraph({ graph, scanning, onSelect }: { graph: Graph; scann
       {!graph.nodes.length ? (
         <div className="empty">AWAITING FIRST OBSERVATION…</div>
       ) : (
-        <svg viewBox={`0 0 ${width} ${height}`} width={width * scale} height={height * scale} className="graph">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          width={width * scale}
+          height={height * scale}
+          className="graph"
+          role="group"
+          aria-label={`Dependency graph: ${graph.nodes.filter((n) => n.level === 'RELEVANT' || n.level === 'CRITICAL').length} packages need attention. Tab to a package to open its case.`}
+        >
           <defs>
             {/* user-space region: a perfectly horizontal edge has a zero-height bbox and would vanish */}
             <filter id="glow" filterUnits="userSpaceOnUse" x={-50} y={-50} width={width + 100} height={height + 100}>
@@ -177,9 +224,26 @@ export function ThreatGraph({ graph, scanning, onSelect }: { graph: Graph; scann
                 opacity={dim ? 0.2 : threat || n.depth === 0 ? 1 : watched ? 0.75 : 0.55}
                 onMouseEnter={() => setHover(n.id)}
                 onMouseLeave={() => setHover(null)}
-                onClick={() => n.level && onSelect(n.id)}
                 style={{ cursor: n.level ? 'pointer' : 'default' }}
+                // boxes with findings are real buttons for keyboard and screen readers
+                {...(n.level
+                  ? {
+                      role: 'button',
+                      tabIndex: 0,
+                      'aria-label': `${n.id} ${n.version ?? ''}: ${n.level === 'CRITICAL' ? 'threat' : n.level.toLowerCase()}, score ${n.score}, ${n.vulns} vulnerabilit${n.vulns === 1 ? 'y' : 'ies'}. Open case.`,
+                      onClick: () => onSelect(n.id),
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSelect(n.id);
+                        }
+                      },
+                      onFocus: () => setHover(n.id),
+                      onBlur: () => setHover(null),
+                    }
+                  : { 'aria-hidden': true })}
               >
+                {n.level && <rect className="focus-ring" x={n.x - 5} y={n.y - 5} width={n.w + 10} height={n.h + 10} />}
                 {/* opaque so edges never show through a box */}
                 <rect x={n.x} y={n.y} width={n.w} height={n.h} fill={threat || watched ? '#0b0b0b' : 'transparent'} />
                 {threat && <rect x={n.x} y={n.y} width={n.w} height={n.h} fill={c} opacity={0.07} />}
