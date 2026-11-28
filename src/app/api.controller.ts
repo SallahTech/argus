@@ -16,11 +16,13 @@ import * as semver from 'semver';
 import { map, Observable } from 'rxjs';
 import { Repository } from 'typeorm';
 import { LEVEL_RANK } from '../core/group';
+import { Countermeasure, countermeasure } from '../core/countermeasure';
 import { FeatureCheck, ThreatLevel } from '../core/types';
 import { FindingEntity, RepositoryEntity } from './entities';
 import { EventsService } from './events.service';
 import { ScanService } from './scan.service';
 import { WatchService } from './watch.service';
+import { HistoryService } from './history.service';
 
 /** A "number": all open vulnerabilities for one package@version in one repo. */
 export interface NumberDto {
@@ -57,15 +59,18 @@ export interface NumberDto {
   notExploitable: boolean;
   /** lockfile format of the repo, so the fix uses the right package manager syntax */
   lockfileFormat: string | null;
+  /** how to fix it, in the project's package manager; for transitive packages, via the direct dependency */
+  countermeasure: Countermeasure | null;
+  /** in package.json (true), or pulled in by something else */
+  direct: boolean;
 }
 
 function numberId(repoId: string, pkgKey: string) {
   return createHash('sha1').update(`${repoId}|${pkgKey}`).digest('hex').slice(0, 12);
 }
-/** A case number in the style of the show: 000-00-0000, derived from the id. */
+/** A short, stable case number derived from the id, e.g. CASE-40217. */
 function caseNo(id: string) {
-  const d = BigInt('0x' + id).toString().padStart(9, '0').slice(-9);
-  return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}`;
+  return `CASE-${(BigInt('0x' + id) % 100000n).toString().padStart(5, '0')}`;
 }
 
 @Controller('api')
@@ -76,6 +81,7 @@ export class ApiController {
     private readonly scanner: ScanService,
     private readonly events: EventsService,
     private readonly watch: WatchService,
+    private readonly history: HistoryService,
   ) {}
 
   // ---------- repos ----------
@@ -98,6 +104,18 @@ export class ApiController {
     const repo = await this.repos.findOneBy({ id });
     if (!repo) throw new NotFoundException();
     return repo.graph ?? { nodes: [], edges: [], hidden: 0 };
+  }
+
+  /** Time machine for one repo: summary, per-CVE history and Machine view frames. ?since=YYYY-MM-DD&refresh=1 */
+  @Get('repos/:id/history')
+  async repoHistory(@Param('id') id: string, @Query('since') since?: string, @Query('refresh') refresh?: string) {
+    const repo = await this.repos.findOneBy({ id });
+    if (!repo) throw new NotFoundException();
+    try {
+      return await this.history.get(repo, { since, refresh: refresh === '1' });
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
   }
 
   @Post('repos/:id/scan')
@@ -225,6 +243,8 @@ export class ApiController {
           findings: [],
           notExploitable: true,
           lockfileFormat: f.repository.lockfileFormat ?? null,
+          countermeasure: null,
+          direct: f.exposure?.direct ?? f.path.length <= 1,
         };
         groups.set(id, n);
       }
@@ -254,7 +274,10 @@ export class ApiController {
       } else if (!f.malicious) n.unfixed++;
     }
     const out = [...groups.values()];
-    for (const n of out) n.findings.sort((a, b) => b.score - a.score);
+    for (const n of out) {
+      n.findings.sort((a, b) => b.score - a.score);
+      n.countermeasure = countermeasure(n.name, n.fixVersion, n.path, n.lockfileFormat, n.direct);
+    }
     return out.sort((a, b) => b.score - a.score || b.findings.length - a.findings.length);
   }
 }

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { fmtDateTime, fmtTime } from './time';
 import type { ArgusEvent, CaseFile, FeatureCheck, Level, ThreatNumber } from './api';
 
 const cls = (level: Level | null | undefined) => (level === 'CRITICAL' ? 'c-red' : level === 'RELEVANT' ? 'c-yellow' : 'c-white');
@@ -42,7 +43,7 @@ export function NumbersPanel({ numbers, showQuiet, onToggleQuiet, onSelect, sele
         {list.map((n) => (
           <button key={n.id} className={`number ${cls(n.level)} ${selected === n.id ? 'sel' : ''}`} onClick={() => onSelect(n.id)}>
             <div className="number-top">
-              <span className="case">#{n.caseNo}</span>
+              <span className="case-no">{n.caseNo}</span>
               <span className="score">{n.score}</span>
             </div>
             <div className="number-name">
@@ -55,7 +56,13 @@ export function NumbersPanel({ numbers, showQuiet, onToggleQuiet, onSelect, sele
               <span className="muted">
                 {n.findings.length} vuln{n.findings.length > 1 ? 's' : ''}
                 {n.findings.some((f) => f.kevDateAdded) && ' · EXPLOITED'}
-                {n.fixVersion ? ` · fix ${n.fixVersion}` : ' · no fix'}
+                {!n.fixVersion
+                  ? ' · no fix'
+                  : n.path.length > 1
+                    ? ` · via ${n.path[0]} · pin ${n.fixVersion}`
+                    : n.direct
+                      ? ` · fix ${n.fixVersion}`
+                      : ` · dev tooling`}
               </span>
             </div>
           </button>
@@ -91,8 +98,12 @@ function FeatureChecks({ file }: { file: CaseFile }) {
               {check.status === 'unused'
                 ? check.kind === 'build-time'
                   ? 'Build time only: never runs in production'
-                  : `Not exploitable here: ${check.feature} never used`
-                : `In use: ${check.feature}`}
+                  : check.kind === 'platform'
+                    ? `Not exploitable here: needs ${check.feature}`
+                    : `Not exploitable here: ${check.feature} never used`
+                : check.kind === 'platform'
+                  ? `Affected platform: ${check.feature}`
+                  : `In use: ${check.feature}`}
             </span>
           </div>
           <div className="check-detail">{check.detail.replace(/^not exploitable here: /i, '')}</div>
@@ -111,29 +122,45 @@ function FeatureChecks({ file }: { file: CaseFile }) {
   );
 }
 
-/** The fix in the project's own package manager syntax. */
-export function fixSnippet(c: Pick<CaseFile, 'name' | 'fixVersion' | 'path' | 'lockfileFormat'>): string | null {
-  if (!c.fixVersion) return null;
-  const pm = c.lockfileFormat?.startsWith('yarn') ? 'yarn' : c.lockfileFormat === 'pnpm' ? 'pnpm' : 'npm';
-  const direct = c.path.length === 1;
-  if (direct) return pm === 'npm' ? `npm install ${c.name}@${c.fixVersion}` : `${pm} add ${c.name}@${c.fixVersion}`;
-  const pin = `"${c.name}": "^${c.fixVersion}"`;
-  if (pm === 'yarn') return `// package.json, then: yarn install\n"resolutions": {\n  ${pin}\n}`;
-  if (pm === 'pnpm') return `// package.json, then: pnpm install\n"pnpm": {\n  "overrides": {\n    ${pin}\n  }\n}`;
-  return `// package.json, then: npm install\n"overrides": {\n  ${pin}\n}`;
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="btn"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? 'COPIED' : 'COPY'}
+    </button>
+  );
 }
 
+/** The case file, as a drawer over the page: Esc or the backdrop closes it, focus moves into it. */
 export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const snippet = fixSnippet(file);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      opener?.focus?.(); // give focus back to what opened the case
+    };
+  }, [onClose]);
   const top = file.findings[0];
+  const cm = file.countermeasure;
   return (
-    <section className={`panel case ${cls(file.level)}`}>
+    <div className="drawer-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <aside className={`panel case drawer ${cls(file.level)}`} role="dialog" aria-modal="true" aria-labelledby="case-title">
       <header className="panel-head">
-        <span>
-          CASE FILE <span className="case">#{file.caseNo}</span>
+        <span id="case-title">
+          CASE FILE <span className="case-no">{file.caseNo}</span>
         </span>
-        <button className="link" onClick={onClose}>
+        <button className="link" onClick={onClose} ref={closeRef} aria-label="Close case file (Esc)">
           close ✕
         </button>
       </header>
@@ -143,7 +170,7 @@ export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () =
           <div className="subject">
             <Typed text={`${file.name}@${file.version}`} />
           </div>
-          <div className="muted small">observed in {file.repo} since {new Date(file.firstSeenAt).toLocaleString()}</div>
+          <div className="muted small">observed in {file.repo} since {fmtDateTime(file.firstSeenAt)}</div>
         </div>
 
         <div className="assessment">
@@ -206,7 +233,7 @@ export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () =
           <ol className="timeline">
             {file.timeline.map((t, i) => (
               <li key={i} className={cls(t.level ?? null)}>
-                <span className="t-at">{new Date(t.at).toISOString().slice(0, 10)}</span>
+                <span className="t-at">{t.kind === 'DISCLOSED' || t.kind === 'EXPLOITED' ? t.at.slice(0, 10) : fmtDateTime(t.at)}</span>
                 <span className="t-kind">{t.kind.replace('_', ' ')}</span>
                 <span className="t-text">{t.text}</span>
               </li>
@@ -216,19 +243,16 @@ export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () =
 
         <div className="block">
           <div className="muted small">COUNTERMEASURE</div>
-          {snippet ? (
+          {cm ? (
             <>
-              <pre className="snippet">{snippet}</pre>
-              <button
-                className="btn"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(snippet);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                }}
-              >
-                {copied ? 'COPIED' : 'COPY FIX'}
-              </button>
+              <div className="cm-summary">{cm.summary}</div>
+              {cm.options.map((o) => (
+                <div key={o.title} className="cm-option">
+                  <div className="cm-title">{o.title}</div>
+                  <pre className="snippet">{o.code}</pre>
+                  <CopyButton text={o.code} />
+                </div>
+              ))}
               {file.unfixed > 0 && <div className="muted small">{file.unfixed} vulnerabilities have no fix yet</div>}
             </>
           ) : (
@@ -236,11 +260,12 @@ export function CaseFilePanel({ file, onClose }: { file: CaseFile; onClose: () =
           )}
         </div>
       </div>
-    </section>
+    </aside>
+    </div>
   );
 }
 
-const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour12: false });
+const time = (iso: string) => fmtTime(iso);
 
 export function Feed({ events }: { events: ArgusEvent[] }) {
   return (

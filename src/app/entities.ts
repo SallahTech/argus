@@ -4,6 +4,7 @@ import {
   Entity,
   Index,
   ManyToOne,
+  PrimaryColumn,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -24,6 +25,8 @@ export class RepositoryEntity {
   /** path to a local checkout */
   @Column() path!: string;
   @Column({ default: false }) internetFacing!: boolean;
+  /** linux | windows | macos, from argus.config.json; null = detect from deployment files */
+  @Column({ type: 'varchar', nullable: true }) platform!: 'linux' | 'windows' | 'macos' | null;
   @Column({ type: 'int', default: 0 }) packageCount!: number;
   @Column({ type: 'int', default: 0 }) reachableCount!: number;
   /** npm | pnpm | yarn-classic | yarn-berry, from the last scan */
@@ -90,4 +93,15 @@ export class EventEntity {
   @Column({ type: 'varchar', nullable: true }) packageKey!: string | null;
   @Column({ type: 'varchar', nullable: true }) vulnId!: string | null;
   @Column({ type: 'text' }) message!: string;
+}
+
+/** Last time machine replay per repo, kept across restarts (a replay pulls a year of EPSS history). */
+@Entity('history_cache')
+export class HistoryCacheEntity {
+  @PrimaryColumn() repoId!: string;
+  /** what the replay depended on: lockfile state, options; a different key = stale */
+  @Column() key!: string;
+  @Column({ type: DATE }) computedAt!: Date;
+  /** the HistoryReport as JSON */
+  @Column({ type: 'text' }) report!: string;
 }

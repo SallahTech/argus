@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type ArgusEvent, type CaseFile, type Graph, type Overview, type ThreatNumber } from './api';
-import { ThreatGraph } from './Graph';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, type ArgusEvent, type CaseFile, type Graph, type HistoryReport, type Overview, type ThreatNumber } from './api';
+import { ThreatGraph, unionGraph } from './Graph';
 import { CaseFilePanel, Feed, NumbersPanel } from './Panels';
+import { Scrubber, TimeMachinePanel } from './TimeMachine';
+import { fmtDate, fmtTime, tzLabel } from './time';
 
 function Clock() {
   const [now, setNow] = useState(new Date());
@@ -10,8 +12,8 @@ function Clock() {
     return () => clearInterval(t);
   }, []);
   return (
-    <span className="clock">
-      {now.toISOString().slice(0, 10)} {now.toISOString().slice(11, 19)} UTC
+    <span className="clock" title="All times are shown in your local time zone">
+      {fmtDate(now)} {fmtTime(now)} <span className="muted">{tzLabel}</span>
     </span>
   );
 }
@@ -35,8 +37,8 @@ function SweepCountdown({ next, onSweep }: { next: string | null | undefined; on
 }
 
 /** ?repo=<name>&case=<id> keeps the view across reloads and makes it linkable. */
-const urlParam = (k: 'repo' | 'case') => new URLSearchParams(window.location.search).get(k);
-function setUrl(params: { repo?: string | null; case?: string | null }, mode: 'push' | 'replace' = 'push') {
+const urlParam = (k: 'repo' | 'case' | 'view') => new URLSearchParams(window.location.search).get(k);
+function setUrl(params: { repo?: string | null; case?: string | null; view?: string | null }, mode: 'push' | 'replace' = 'push') {
   const u = new URL(window.location.href);
   for (const [k, v] of Object.entries(params)) (v ? u.searchParams.set(k, v) : u.searchParams.delete(k));
   if (u.href !== window.location.href) window.history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', u);
@@ -53,6 +55,31 @@ export default function App() {
   const [offline, setOffline] = useState(false);
   const refreshTimer = useRef<number | undefined>(undefined);
   const overviewRef = useRef<Overview | null>(null);
+
+  // ---- time machine ----
+  const [view, setView] = useState<'live' | 'history'>(urlParam('view') === 'history' ? 'history' : 'live');
+  const [history, setHistory] = useState<{ repoId: string; report?: HistoryReport; error?: string } | null>(null);
+  const [frame, setFrame] = useState(0);
+  const [playing, setPlaying] = useState(false);
+
+  const loadHistory = useCallback(async (rid: string, refresh = false, quiet = false) => {
+    if (!quiet) {
+      setHistory({ repoId: rid });
+      setPlaying(false);
+    }
+    try {
+      const report = await api.history(rid, refresh);
+      setHistory({ repoId: rid, report });
+      if (!quiet) setFrame(Math.max(0, report.frames.length - 1)); // start at today
+    } catch (e) {
+      if (!quiet) setHistory({ repoId: rid, error: (e as Error).message });
+    }
+  }, []);
+  // a background replay finished: swap in the new one without a loading screen
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   const refresh = useCallback(async (rid: string | null) => {
     try {
@@ -86,6 +113,9 @@ export default function App() {
     es.onmessage = (m) => {
       const e: ArgusEvent = JSON.parse(m.data);
       setEvents((prev) => [e, ...prev].slice(0, 120));
+      const h = historyRef.current;
+      if (e.type === 'INTEL' && e.message.startsWith('TIME MACHINE') && viewRef.current === 'history' && h?.report)
+        void loadHistory(h.repoId, false, true);
       if (['SCAN_START', 'SCAN_DONE', 'NEW_NUMBER', 'ESCALATED', 'RESOLVED', 'SCAN_ERROR', 'INTEL', 'SCORE_CHANGED', 'LOCKFILE'].includes(e.type)) {
         clearTimeout(refreshTimer.current);
         refreshTimer.current = window.setTimeout(() => setRepoId((r) => (void refresh(r), r)), 400);
@@ -94,11 +124,12 @@ export default function App() {
     es.onerror = () => setOffline(true);
     es.onopen = () => setOffline(false);
     return () => es.close();
-  }, [refresh]);
+  }, [refresh, loadHistory]);
 
   // reopen the case from the URL after a reload; follow back/forward
   useEffect(() => {
     const syncFromUrl = () => {
+      setView(urlParam('view') === 'history' ? 'history' : 'live');
       const r = overviewRef.current?.repos.find((x) => x.name === urlParam('repo'));
       if (r) setRepoId(r.id);
       const c = urlParam('case');
@@ -118,10 +149,10 @@ export default function App() {
     setCaseFile(await api.caseFile(id));
     setUrl({ case: id });
   };
-  const closeCase = () => {
+  const closeCase = useCallback(() => {
     setCaseFile(null);
     setUrl({ case: null });
-  };
+  }, []);
   const selectRepo = (r: { id: string; name: string }) => {
     setRepoId(r.id);
     setCaseFile(null);
@@ -130,6 +161,50 @@ export default function App() {
   const openByPackage = (pkg: string) => {
     const n = numbers.find((x) => x.name === pkg);
     if (n) void openCase(n.id);
+  };
+
+  useEffect(() => {
+    if (view === 'history' && repoId && history?.repoId !== repoId) void loadHistory(repoId);
+  }, [view, repoId, history?.repoId, loadHistory]);
+
+  // play: step through frames, stop at today
+  useEffect(() => {
+    if (!playing || !history?.report) return;
+    const n = history.report.frames.length;
+    const t = setInterval(() => {
+      setFrame((i) => {
+        if (i >= n - 1) {
+          setPlaying(false);
+          return i;
+        }
+        return i + 1;
+      });
+    }, 700);
+    return () => clearInterval(t);
+  }, [playing, history?.report]);
+
+  const report = view === 'history' && history?.repoId === repoId ? history.report : undefined;
+  const layoutGraph = useMemo(() => (report ? unionGraph(report.frames.map((f) => f.graph)) : undefined), [report]);
+  const shownGraph = report ? report.frames[Math.min(frame, report.frames.length - 1)].graph : graph;
+  const switchView = (v: 'live' | 'history') => {
+    setView(v);
+    setPlaying(false);
+    setCaseFile(null);
+    setUrl({ view: v === 'history' ? 'history' : null, case: null });
+  };
+  const togglePlay = useCallback(() => {
+    if (!report) return;
+    setPlaying((p) => {
+      if (!p && frame >= report.frames.length - 1) setFrame(0); // replay from the start
+      return !p;
+    });
+  }, [report, frame]);
+  const jumpTo = (date: string) => {
+    if (!report) return;
+    let best = 0;
+    report.frames.forEach((f, i) => f.date <= date && (best = i));
+    setPlaying(false);
+    setFrame(best);
   };
 
   const repo = overview?.repos.find((r) => r.id === repoId);
@@ -181,22 +256,51 @@ export default function App() {
           <header className="panel-head">
             <span>
               MACHINE VIEW {repo && <span className="muted">// {repo.name}{repo.internetFacing ? ' · internet-facing' : ''}</span>}
+              <span className="mode">
+                <button className={view === 'live' ? 'on' : ''} onClick={() => switchView('live')}>
+                  LIVE
+                </button>
+                <button className={view === 'history' ? 'on' : ''} onClick={() => switchView('history')}>
+                  TIME MACHINE
+                </button>
+              </span>
             </span>
             <span className="muted">
-              {repo?.lastScannedAt ? `last observed ${new Date(repo.lastScannedAt).toLocaleTimeString(undefined, { hour12: false })}` : ''}
+              {repo?.lastScannedAt ? `last observed ${fmtTime(repo.lastScannedAt, false)}` : ''}
             </span>
           </header>
-          <ThreatGraph graph={graph} scanning={!!overview?.scanning} onSelect={openByPackage} />
-          <div className="legend">
-            <span><i className="lg lg-white" /> observed</span>
-            <span><i className="lg lg-yellow" /> relevant</span>
-            <span><i className="lg lg-red" /> threat</span>
-            <span className="muted">hover to trace a path · click a box to open its case</span>
-          </div>
+          {view === 'history' && !report ? (
+            <div className="loading">
+              {history?.error ? (
+                <div>
+                  <div className="c-red">TIME MACHINE UNAVAILABLE</div>
+                  <div className="small">{history.error}</div>
+                </div>
+              ) : (
+                <div>
+                  REPLAYING A YEAR OF INTEL…
+                  <div className="small">lockfile history × OSV × EPSS by date × CISA KEV · first run takes a minute</div>
+                </div>
+              )}
+              <div className="sweep" />
+            </div>
+          ) : (
+            <ThreatGraph graph={shownGraph} layoutGraph={layoutGraph} scanning={view === 'live' && !!overview?.scanning} onSelect={openByPackage} />
+          )}
+          {report ? (
+            <Scrubber report={report} index={Math.min(frame, report.frames.length - 1)} onChange={(i) => (setPlaying(false), setFrame(i))} playing={playing} onTogglePlay={togglePlay} />
+          ) : (
+            <div className="legend">
+              <span><i className="lg lg-white" /> observed</span>
+              <span><i className="lg lg-yellow" /> relevant</span>
+              <span><i className="lg lg-red" /> threat</span>
+              <span className="muted">hover to trace a path · click a box to open its case</span>
+            </div>
+          )}
         </section>
 
-        {caseFile ? (
-          <CaseFilePanel file={caseFile} onClose={closeCase} />
+        {report ? (
+          <TimeMachinePanel report={report} index={Math.min(frame, report.frames.length - 1)} onJump={jumpTo} onRefresh={() => repoId && void loadHistory(repoId, true)} />
         ) : (
           <NumbersPanel
             numbers={numbers}
@@ -209,6 +313,7 @@ export default function App() {
 
         <Feed events={events} />
       </main>
+      {caseFile && <CaseFilePanel file={caseFile} onClose={closeCase} />}
     </div>
   );
 }

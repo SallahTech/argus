@@ -157,3 +157,55 @@ describe('build time only', () => {
     expect(by.postcss.buildTimeOnly).toBeFalsy();
   });
 });
+
+describe('Next.js: platform and opt-in feature rules (pingBot-UI findings)', () => {
+  const next = dep('next', { direct: true, importCount: 5, path: ['next'] });
+  const plain = src({ 'next.config.ts': 'const nextConfig = {};\nexport default nextConfig;', 'src/app/page.tsx': 'export default function P() { return null }' });
+  const linux = { name: 'ui', internetFacing: true, platform: 'linux' as const, platformSource: 'Railway' };
+  const unknown = { name: 'ui', internetFacing: true };
+
+  it('Windows-only RCE: ruled out on Linux, kept on Windows, no claim when the host is unknown', () => {
+    const v = vuln('Next.js: Unauthenticated Remote Code Execution on windows-hosted servers', { severity: 'CRITICAL' });
+    const onLinux = checkFeature(next, v, plain, linux)!;
+    expect(onLinux).toMatchObject({ status: 'unused', kind: 'platform' });
+    expect(onLinux.detail).toMatch(/runs on linux \(Railway\)/);
+    expect(assess(next, v, linux, onLinux).level).toBe('IRRELEVANT'); // was THREAT 89
+    expect(checkFeature(next, v, plain, { ...linux, platform: 'windows' })?.status).toBe('used');
+    expect(checkFeature(next, v, plain, unknown)).toBeUndefined();
+  });
+
+  it.each([
+    ['Next.js vulnerable to server-side request forgery in applications using WebSocket upgrades', "import { WebSocketServer } from 'ws';"],
+    ['Denial of Service via connection exhaustion in applications using Cache Components', 'export default { cacheComponents: true }'],
+    ['Unauthenticated Remote Code Execution in `use cache` functions returning typed arrays', "'use cache';\nexport async function f() {}"],
+    ['Server-Side Request Forgery in rewrites via attacker-controlled destination hostname', 'export default { async rewrites() { return [] } }'],
+    ['HttpOnly cookie exposure through internal response header on Next.js Edge runtime routes', "export const runtime = 'edge';"],
+  ])('%s', (summary, usage) => {
+    const v = vuln(summary);
+    expect(checkFeature(next, v, plain, linux)?.status).toBe('unused');
+    expect(checkFeature(next, v, src({ 'src/app/x.ts': usage }), linux)?.status).toBe('used');
+  });
+
+  it('Server Components DoS: every app uses them, so no rule and no claim', () =>
+    expect(checkFeature(next, vuln('Next.js Vulnerable to Denial of Service with Server Components'), plain, linux)).toBeUndefined());
+});
+
+describe('platform detection', () => {
+  const { mkdtempSync, writeFileSync } = require('fs');
+  const { tmpdir } = require('os');
+  const { join } = require('path');
+  const { detectPlatform } = require('../src/core/platform');
+  const dirWith = (files: Record<string, string>) => {
+    const d = mkdtempSync(join(tmpdir(), 'argus-platform-'));
+    for (const [f, c] of Object.entries(files)) writeFileSync(join(d, f), c);
+    return d;
+  };
+  it('reads deployment files', () => {
+    expect(detectPlatform(dirWith({ 'railway.json': '{}' }))).toEqual({ platform: 'linux', source: 'Railway' });
+    expect(detectPlatform(dirWith({ 'vercel.json': '{}' }))).toEqual({ platform: 'linux', source: 'Vercel' });
+    expect(detectPlatform(dirWith({ Dockerfile: 'FROM node:22-alpine' }))).toEqual({ platform: 'linux', source: 'Dockerfile' });
+    expect(detectPlatform(dirWith({ Dockerfile: 'FROM mcr.microsoft.com/windows/servercore' }))?.platform).toBe('windows');
+    expect(detectPlatform(dirWith({ 'web.config': '<x/>' }))?.platform).toBe('windows');
+    expect(detectPlatform(dirWith({ 'README.md': 'x' }))).toBeNull();
+  });
+});

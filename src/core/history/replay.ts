@@ -1,4 +1,7 @@
 import { fetchEpss, fetchKev, osvGetVulns, osvQueryBatch } from '../feeds';
+import { buildGraph, ThreatGraph } from '../graph';
+import { groupFindings, LEVEL_RANK } from '../group';
+import { Finding } from '../pipeline';
 import { checkFeature } from '../features';
 import { applyReachability, countImports, indexSources } from '../reachability';
 import { assess, THRESHOLDS } from '../scoring';
@@ -32,12 +35,23 @@ export interface HistoryFinding {
   timeline: { date: string; score: number; level: ThreatLevel; why: string }[];
 }
 
+/** The Machine view as it would have looked on one day. Only recorded when something changed. */
+export interface HistoryFrame {
+  date: string;
+  graph: ThreatGraph;
+  counts: { relevant: number; critical: number; watched: number };
+  /** what changed that day, e.g. "multer@2.1.1 became RELEVANT", "lockfile changed" */
+  notes: { kind: 'lockfile' | 'relevant' | 'critical' | 'exploited' | 'resolved'; text: string }[];
+}
+
 export interface HistoryReport {
   repo: RepoContext;
   from: string;
   to: string;
   snapshots: { date: string; sha: string; packages: number }[];
   findings: HistoryFinding[];
+  /** only when requested (frames: true) */
+  frames?: HistoryFrame[];
   summary: {
     affected: number;
     everRelevant: number;
@@ -67,6 +81,8 @@ export interface ReplayOptions {
   epssEveryDays?: number;
   fetch?: FetchFn;
   onProgress?: (step: string, detail: string) => void;
+  /** also record Machine view frames for the timeline scrubber */
+  frames?: boolean;
 }
 
 /**
@@ -131,6 +147,10 @@ export async function replayHistory(repoPath: string, repo: RepoContext, opts: R
   const dates = [...events].filter((d) => d >= from && d <= to).sort();
 
   const tracked = new Map<string, HistoryFinding>();
+  const frames: HistoryFrame[] = [];
+  let lastSig = '';
+  let prevLevels = new Map<string, ThreatLevel>(); // package@version -> level, previous frame day
+  let prevState: (typeof states)[number] | undefined;
   const presentOn = new Map<string, string>(); // key -> last date seen installed
   for (const date of dates) {
     const state = [...states].reverse().find((s) => s.date <= date);
@@ -138,6 +158,7 @@ export async function replayHistory(repoPath: string, repo: RepoContext, opts: R
     const epssSample = [...samples].reverse().find((s) => s <= date);
     const epssToday = epssSample ? epssAt.get(epssSample) : undefined;
     const seenToday = new Set<string>();
+    const todays: Finding[] = [];
 
     for (const dep of state.dependencies) {
       for (const id of hits.get(`${dep.name}@${dep.version}`) ?? []) {
@@ -150,8 +171,9 @@ export async function replayHistory(repoPath: string, repo: RepoContext, opts: R
           const e = epssToday?.get(c);
           if (e && (!v.epss || e.percentile > v.epss.percentile)) v.epss = e;
         }
-        const check = checkFeature(dep, v, sources);
+        const check = checkFeature(dep, v, sources, repo);
         const a = assess(dep, v, repo, check);
+        if (opts.frames) todays.push({ ...a, dependency: dep, vulnerability: v, check });
         const key = `${dep.name}@${dep.version}|${id}`;
         seenToday.add(key);
         presentOn.set(key, date);
@@ -193,6 +215,40 @@ export async function replayHistory(repoPath: string, repo: RepoContext, opts: R
     }
     // anything tracked but not installed today was upgraded or removed
     for (const [key, t] of tracked) if (!seenToday.has(key) && !t.removedOn && presentOn.get(key)! < date) t.removedOn = date;
+
+    if (opts.frames) {
+      const groups = groupFindings(todays);
+      const graph = buildGraph(state.dependencies, groups);
+      const levels = new Map(groups.filter((g) => g.level !== 'IRRELEVANT').map((g) => [g.key, g.level] as const));
+      const notes: HistoryFrame['notes'] = [];
+      if (prevState && state !== prevState) notes.push({ kind: 'lockfile', text: `lockfile changed (${state.sha === 'working-copy' ? 'uncommitted' : state.sha.slice(0, 7)})` });
+      for (const [k, lvl] of levels) {
+        const before = prevLevels.get(k);
+        if (!before) notes.push({ kind: lvl === 'CRITICAL' ? 'critical' : 'relevant', text: `${k} became ${lvl}` });
+        else if (LEVEL_RANK[lvl] > LEVEL_RANK[before]) notes.push({ kind: 'critical', text: `${k} escalated to ${lvl}` });
+      }
+      for (const [k] of prevLevels) if (!levels.has(k)) notes.push({ kind: 'resolved', text: `${k} no longer relevant` });
+      for (const f of todays)
+        if (f.vulnerability.kev?.dateAdded === date)
+          notes.push({ kind: 'exploited', text: `${f.vulnerability.cveIds[0] ?? f.vulnerability.id} confirmed exploited (CISA KEV)` });
+
+      const sig = JSON.stringify([graph.nodes.map((n) => [n.id, n.level, n.score]), graph.edges.map((e) => [e.from, e.to, e.level])]);
+      if (sig !== lastSig || notes.length || date === to) {
+        frames.push({
+          date,
+          graph,
+          counts: {
+            relevant: groups.filter((g) => g.level === 'RELEVANT').length,
+            critical: groups.filter((g) => g.level === 'CRITICAL').length,
+            watched: groups.filter((g) => g.level === 'IRRELEVANT').length,
+          },
+          notes,
+        });
+        lastSig = sig;
+      }
+      prevLevels = levels;
+      prevState = state;
+    }
   }
 
   const findings = [...tracked.values()];
@@ -211,6 +267,7 @@ export async function replayHistory(repoPath: string, repo: RepoContext, opts: R
     to,
     snapshots: states.map((s) => ({ date: s.date, sha: s.sha, packages: s.dependencies.length })),
     findings,
+    ...(opts.frames ? { frames } : {}),
     summary: {
       affected: findings.length,
       everRelevant: relevant.length,

@@ -8,4 +8,3 @@ web/node_modules
 web/dist
 .DS_Store
 .idea
-!test/fixtures/formats/yarn-classic/node_modules/

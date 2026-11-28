@@ -1,5 +1,5 @@
 import { SourceIndex } from './reachability';
-import { Dependency, FeatureCheck, Vulnerability } from './types';
+import { Dependency, FeatureCheck, RepoContext, Vulnerability } from './types';
 
 /**
  * Feature-level reachability.
@@ -28,6 +28,7 @@ export interface FeatureRule {
 }
 
 type Detector =
+  | { kind: 'platform'; os: 'windows' | 'linux' | 'macos' } // only exploitable when hosted on this OS
   | { kind: 'code'; pattern: RegExp } // any source line matches
   | { kind: 'file'; pattern: RegExp } // a file with this path exists
   | { kind: 'routes'; risky: RegExp }; // a route string contains a risky token
@@ -98,6 +99,48 @@ export const RULES: FeatureRule[] = [
   },
   {
     pkg: 'next',
+    feature: 'Windows hosting',
+    appliesTo: /windows/i,
+    detect: { kind: 'platform', os: 'windows' },
+    because: 'this vulnerability only exists on Windows-hosted servers',
+  },
+  {
+    pkg: 'next',
+    feature: 'WebSocket upgrades',
+    appliesTo: /websocket/i,
+    detect: { kind: 'code', pattern: /from\s+['"](?:ws|socket\.io)['"]|require\(\s*['"](?:ws|socket\.io)['"]\s*\)|\.on\(\s*['"]upgrade['"]|WebSocketServer/ },
+    because: 'only apps that handle WebSocket upgrades (a custom server with ws or socket.io) are affected',
+  },
+  {
+    pkg: 'next',
+    feature: 'Cache Components',
+    appliesTo: /cache components/i,
+    detect: { kind: 'code', pattern: /\bcacheComponents\s*:\s*true/ },
+    because: 'Cache Components is opt-in (cacheComponents: true in next.config)',
+  },
+  {
+    pkg: 'next',
+    feature: '"use cache" functions',
+    appliesTo: /use cache/i,
+    detect: { kind: 'code', pattern: /^\s*['"]use cache(?::[^'"]*)?['"]/m },
+    because: 'only functions marked "use cache" are affected',
+  },
+  {
+    pkg: 'next',
+    feature: 'rewrites',
+    appliesTo: /\brewrites?\b/i,
+    detect: { kind: 'code', pattern: /\brewrites\s*[:(]/ },
+    because: 'only apps that define rewrites in next.config are affected',
+  },
+  {
+    pkg: 'next',
+    feature: 'Edge runtime routes',
+    appliesTo: /edge runtime/i,
+    detect: { kind: 'code', pattern: /\bruntime\s*[=:]\s*['"](?:experimental-)?edge['"]/ },
+    because: 'only routes that opt into the Edge runtime are affected',
+  },
+  {
+    pkg: 'next',
     feature: 'middleware / proxy',
     appliesTo: /middleware/i,
     detect: { kind: 'file', pattern: /^(?:src\/)?(?:middleware|proxy)\.(?:ts|js|mjs)$/ },
@@ -123,7 +166,7 @@ function lineOf(code: string, index: number) {
   return code.slice(0, index).split('\n').length;
 }
 
-function findEvidence(src: SourceIndex, d: Detector, max = 3): string[] {
+function findEvidence(src: SourceIndex, d: Exclude<Detector, { kind: 'platform' }>, max = 3): string[] {
   const hits: string[] = [];
   for (const { file, code } of src.files) {
     if (hits.length >= max) break;
@@ -156,7 +199,7 @@ function countRoutes(src: SourceIndex): number {
 }
 
 /** Feature check for one finding, or undefined when no rule applies. */
-export function checkFeature(dep: Dependency, vuln: Vulnerability, src: SourceIndex): FeatureCheck | undefined {
+export function checkFeature(dep: Dependency, vuln: Vulnerability, src: SourceIndex, repo?: RepoContext): FeatureCheck | undefined {
   if (vuln.malicious) return undefined; // malware runs on install, features don't matter
 
   if (dep.buildTimeOnly) {
@@ -180,7 +223,21 @@ export function checkFeature(dep: Dependency, vuln: Vulnerability, src: SourceIn
   if (!rule) return undefined;
   if (rule.detect.kind === 'routes' && countRoutes(src) === 0) return undefined;
 
-  const evidence = findEvidence(src, rule.detect);
+  if (rule.detect.kind === 'platform') {
+    if (!repo?.platform) return undefined; // unknown host: no claim
+    const where = repo.platformSource ? ` (${repo.platformSource})` : '';
+    return repo.platform === rule.detect.os
+      ? { status: 'used', kind: 'platform', feature: rule.feature, detail: `runs on ${repo.platform}${where}, the affected platform`, evidence: [] }
+      : {
+          status: 'unused',
+          kind: 'platform',
+          feature: rule.feature,
+          detail: `not exploitable here: ${rule.because}, and this app runs on ${repo.platform}${where}`,
+          evidence: [],
+        };
+  }
+
+  const evidence = findEvidence(src, rule.detect as Exclude<Detector, { kind: 'platform' }>);
   return evidence.length
     ? { status: 'used', kind: 'feature', feature: rule.feature, detail: `uses ${rule.feature} (${evidence[0]})`, evidence }
     : { status: 'unused', kind: 'feature', feature: rule.feature, detail: `not exploitable here: ${rule.because}`, evidence: [] };

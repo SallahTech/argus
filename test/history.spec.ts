@@ -131,3 +131,27 @@ describe('two lockfiles in one commit', () => {
     expect(snaps.at(-1)!.file).toBe('package-lock.json');
   });
 });
+
+describe('time machine frames', () => {
+  it('records a Machine view frame at every turning point, with notes', async () => {
+    const r = await replayHistory(makeRepo(), { name: 'demo', internetFacing: false }, { since: '2026-01-01', until: '2026-11-26', fetch: fakeFeeds, frames: true });
+    const byDate = Object.fromEntries(r.frames!.map((f) => [f.date, f]));
+    expect(byDate['2026-01-10'].notes).toContainEqual({ kind: 'relevant', text: 'a@1.0.0 became RELEVANT' });
+    expect(byDate['2026-03-01'].notes).toContainEqual({ kind: 'relevant', text: 'b@1.0.0 became RELEVANT' });
+    expect(byDate['2026-04-15'].notes).toEqual(
+      expect.arrayContaining([
+        { kind: 'critical', text: 'b@1.0.0 escalated to CRITICAL' },
+        { kind: 'exploited', text: 'CVE-2026-0002 confirmed exploited (CISA KEV)' },
+      ]),
+    );
+    expect(byDate['2026-06-01'].notes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'lockfile' }), { kind: 'resolved', text: 'a@1.0.0 no longer relevant' }]),
+    );
+    // the graph in each frame reflects that day: b is red on 2026-04-15, a is gone by 2026-06-01
+    expect(byDate['2026-04-15'].graph.nodes.find((n) => n.id === 'b')?.level).toBe('CRITICAL');
+    expect(byDate['2026-06-01'].graph.nodes.find((n) => n.id === 'a')?.level).toBeNull();
+    // quiet days are skipped: far fewer frames than replayed days
+    expect(r.frames!.length).toBeLessThan(15);
+    expect(r.frames!.at(-1)!.date).toBe('2026-11-26');
+  });
+});

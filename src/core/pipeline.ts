@@ -56,7 +56,7 @@ export async function scanRepo(
   for (const dep of dependencies) {
     for (const id of hits.get(`${dep.name}@${dep.version}`) ?? []) {
       const vulnerability = vulns.get(id)!;
-      const check = checkFeature(dep, vulnerability, sources);
+      const check = checkFeature(dep, vulnerability, sources, repo);
       findings.push({ ...assess(dep, vulnerability, repo, check), dependency: dep, vulnerability, check });
     }
   }
